@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SongWalker — Music Programming Language</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --surface: #181825;
+      --text: #cdd6f4;
+      --accent: #89b4fa;
+      --accent-hover: #74c7ec;
+      --error: #f38ba8;
+      --border: #313244;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1rem 2rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    header .subtitle {
+      font-size: 0.85rem;
+      opacity: 0.6;
+    }
+
+    .toolbar {
+      padding: 0.5rem 2rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.4rem 0.8rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.15s;
+    }
+    button:hover { background: var(--border); }
+    button.primary { background: var(--accent); color: var(--bg); font-weight: 600; }
+    button.primary:hover { background: var(--accent-hover); }
+    button.danger { border-color: var(--red); color: var(--red); }
+    button.danger:hover { background: var(--red); color: var(--bg); }
+
+    .spacer { flex: 1; }
+
+    #status {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      font-family: var(--font-mono);
+    }
+
+    .editor-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      min-height: 0;
+    }
+
+    #editor {
+      flex: 1;
+      width: 100%;
+      padding: 1.5rem 2rem;
+      background: var(--surface);
+      color: var(--text);
+      border: none;
+      resize: none;
+      font-family: var(--font-mono);
+      font-size: 14px;
+      line-height: 1.6;
+      tab-size: 4;
+      outline: none;
+    }
+
+    #error {
+      padding: 0 2rem;
+      color: var(--error);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      min-height: 1.5rem;
+      line-height: 1.5rem;
+    }
+
+    /* Fullscreen mode */
+    html.fullscreen header,
+    html.fullscreen .about {
+      display: none;
+    }
+    html.fullscreen .toolbar {
+      padding: 0.5rem 1rem;
+    }
+    html.fullscreen #editor {
+      padding: 1rem;
+    }
+
+    .about {
+      padding: 2rem;
+      border-top: 1px solid var(--border);
+      max-width: 700px;
+    }
+    .about h2 { font-size: 1.1rem; margin-bottom: 0.5rem; color: var(--accent); }
+    .about p { font-size: 0.9rem; line-height: 1.6; opacity: 0.8; margin-bottom: 0.5rem; }
+    .about code { font-family: var(--font-mono); background: var(--surface); padding: 0.1em 0.3em; border-radius: 3px; }
+    .about a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SongWalker</h1>
+    <span class="subtitle">Music Programming Language</span>
+  </header>
+
+  <div class="toolbar">
+    <button id="play-btn" class="primary">&#9654; Play</button>
+    <button id="stop-btn" class="danger">&#9632; Stop</button>
+    <span class="spacer"></span>
+    <span id="status">Ready</span>
+    <span class="spacer"></span>
+    <button id="open-btn">Open</button>
+    <button id="save-btn">Save</button>
+    <button id="fullscreen-btn">&#x26F6; Fullscreen</button>
+  </div>
+
+  <div id="error"></div>
+
+  <div class="editor-container">
+    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+  </div>
+
+  <div class="about">
+    <h2>About</h2>
+    <p>
+      SongWalker is a music programming language. Write songs using a minimalist notation
+      with JavaScript control flow. Press <code>Ctrl+Enter</code> to play.
+    </p>
+    <p>
+      Your code is saved automatically to your browser. Use <strong>Open</strong>/<strong>Save</strong>
+      to work with <code>.sw</code> files on disk.
+    </p>
+  </div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

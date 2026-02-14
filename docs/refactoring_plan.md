@@ -164,3 +164,25 @@ Monaco Editor supports custom keybindings easily. We will map:
 3.  **Phase 2: Audio Engine**: Implement the JS Scheduler and basic WebAudio integration.
 4.  **Phase 3: Editor Prototype**: Setup SolidJS/Svelte app with Monaco Editor and WASM integration.
 5.  **Phase 4: DSP & Offline**: Implement custom WASM nodes and the CLI renderer.
+6.  **Phase 5: Website & Hosting**: Build the public-facing website.
+
+## 9. Phase 5: Website & Hosting
+
+### A. Overview
+Create a public website (`songwalker.dev` or similar) that serves as both the project homepage and the primary way to use the editor. The editor should be the hero element on the front page — users should be able to start writing music immediately without signing up.
+
+### B. Editor Integration
+*   **Front-page Editor**: The Monaco-based editor is embedded directly on the landing page, pre-loaded with an example song.
+*   **Full-screen Mode**: A toggle (or `F11` / `Escape`) to expand the editor to fill the entire viewport, hiding all marketing/description content.
+*   **Responsive**: The editor should work on tablets and desktops. Mobile can show a read-only/playback view.
+
+### C. Persistence
+*   **LocalStorage**: All editor state (source code, open tabs, playback position, settings) is automatically persisted to `localStorage`. Returning users pick up exactly where they left off.
+*   **File System Access API**: When the browser supports the [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API), offer native Open/Save dialogs (`showOpenFilePicker`, `showSaveFilePicker`) for `.sw` files. This allows users to work with real files on disk.
+*   **Fallback**: On browsers without File System Access API, fall back to `<input type="file">` for opening and `Blob` + `<a download>` for saving.
+
+### D. Site Content
+*   **Hero Section**: Editor with a "Play" button for the example song.
+*   **About Section**: Brief description of the project and language.
+*   **Documentation**: Language reference, tutorial, and examples (can link to a `/docs` subpath or separate page).
+*   **GitHub Link**: Link to the repository.
