@@ -87,21 +87,13 @@
       flex-direction: column;
       padding: 0;
       min-height: 0;
+      overflow: hidden;
     }
 
-    #editor {
+    #editor-container {
       flex: 1;
       width: 100%;
-      padding: 1.5rem 2rem;
-      background: var(--surface);
-      color: var(--text);
-      border: none;
-      resize: none;
-      font-family: var(--font-mono);
-      font-size: 14px;
-      line-height: 1.6;
-      tab-size: 4;
-      outline: none;
+      min-height: 0;
     }
 
     #error {
@@ -121,8 +113,8 @@
     html.fullscreen .toolbar {
       padding: 0.5rem 1rem;
     }
-    html.fullscreen #editor {
-      padding: 1rem;
+    html.fullscreen #editor-container {
+      /* Monaco handles its own padding */
     }
 
     .about {
@@ -156,7 +148,7 @@
   <div id="error"></div>
 
   <div class="editor-container">
-    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    <div id="editor-container"></div>
   </div>
 
   <div class="about">

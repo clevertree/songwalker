@@ -1,8 +1,52 @@
 import init, { compile_song } from './wasm/songwalker_core.js';
 import { SongPlayer, EventList } from './player.js';
+import * as monaco from 'monaco-editor';
+import {
+  LANGUAGE_ID,
+  languageConfig,
+  monarchTokens,
+  editorTheme,
+  completionItems,
+} from './sw-language.js';
 
-const EXAMPLE_SONG = `// SongWalker Example
-const lead = await loadPreset("Oscillator");
+// ── Monaco worker setup ──────────────────────────────────
+
+self.MonacoEnvironment = {
+  getWorker(_moduleId: string, label: string) {
+    if (label === 'json') {
+      return new Worker(
+        new URL('monaco-editor/esm/vs/language/json/json.worker.js', import.meta.url),
+        { type: 'module' },
+      );
+    }
+    if (label === 'css' || label === 'scss' || label === 'less') {
+      return new Worker(
+        new URL('monaco-editor/esm/vs/language/css/css.worker.js', import.meta.url),
+        { type: 'module' },
+      );
+    }
+    if (label === 'html' || label === 'handlebars' || label === 'razor') {
+      return new Worker(
+        new URL('monaco-editor/esm/vs/language/html/html.worker.js', import.meta.url),
+        { type: 'module' },
+      );
+    }
+    if (label === 'typescript' || label === 'javascript') {
+      return new Worker(
+        new URL('monaco-editor/esm/vs/language/typescript/ts.worker.js', import.meta.url),
+        { type: 'module' },
+      );
+    }
+    return new Worker(
+      new URL('monaco-editor/esm/vs/editor/editor.worker.js', import.meta.url),
+      { type: 'module' },
+    );
+  },
+};
+
+// ── Example song ─────────────────────────────────────────
+
+const EXAMPLE_SONG = `// SongWalker Example — songwalker.net
 track.beatsPerMinute = 140;
 
 riff();
@@ -51,7 +95,7 @@ async function openFile(): Promise<string | null> {
       const file = await handle.getFile();
       return await file.text();
     } catch {
-      return null; // user cancelled
+      return null;
     }
   } else {
     return new Promise((resolve) => {
@@ -60,11 +104,7 @@ async function openFile(): Promise<string | null> {
       input.accept = '.sw,.txt';
       input.onchange = async () => {
         const file = input.files?.[0];
-        if (file) {
-          resolve(await file.text());
-        } else {
-          resolve(null);
-        }
+        resolve(file ? await file.text() : null);
       };
       input.click();
     });
@@ -95,34 +135,87 @@ async function saveFile(source: string): Promise<void> {
   }
 }
 
+// ── Register SongWalker language ─────────────────────────
+
+function registerLanguage() {
+  monaco.languages.register({ id: LANGUAGE_ID, extensions: ['.sw'] });
+  monaco.languages.setLanguageConfiguration(LANGUAGE_ID, languageConfig);
+  monaco.languages.setMonarchTokensProvider(LANGUAGE_ID, monarchTokens);
+  monaco.editor.defineTheme('songwalker-dark', editorTheme);
+
+  monaco.languages.registerCompletionItemProvider(LANGUAGE_ID, {
+    provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endLineNumber: position.lineNumber,
+        endColumn: word.endColumn,
+      };
+      return {
+        suggestions: completionItems.map((item) => ({ ...item, range })),
+      };
+    },
+  });
+}
+
 // ── App ──────────────────────────────────────────────────
 
 async function main() {
   await init();
 
   const player = new SongPlayer();
-  const editor = document.getElementById('editor') as HTMLTextAreaElement;
-  const playBtn = document.getElementById('play-btn') as HTMLButtonElement;
-  const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement;
-  const openBtn = document.getElementById('open-btn') as HTMLButtonElement;
-  const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
-  const fullscreenBtn = document.getElementById('fullscreen-btn') as HTMLButtonElement;
-  const statusEl = document.getElementById('status') as HTMLElement;
-  const errorEl = document.getElementById('error') as HTMLElement;
 
-  // Load persisted source
-  editor.value = loadSource();
+  // Register language and theme
+  registerLanguage();
 
-  // Auto-save on edit
-  editor.addEventListener('input', () => {
-    saveSource(editor.value);
+  // Create Monaco editor
+  const editorContainer = document.getElementById('editor-container')!;
+  const editor = monaco.editor.create(editorContainer, {
+    value: loadSource(),
+    language: LANGUAGE_ID,
+    theme: 'songwalker-dark',
+    fontSize: 14,
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+    lineNumbers: 'on',
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    automaticLayout: true,
+    tabSize: 4,
+    insertSpaces: true,
+    wordWrap: 'off',
+    renderWhitespace: 'none',
+    cursorBlinking: 'smooth',
+    cursorSmoothCaretAnimation: 'on',
+    smoothScrolling: true,
+    padding: { top: 16, bottom: 16 },
+    bracketPairColorization: { enabled: true },
+    suggest: {
+      showKeywords: true,
+      showSnippets: true,
+    },
   });
+
+  // Auto-save on change
+  editor.onDidChangeModelContent(() => {
+    saveSource(editor.getValue());
+  });
+
+  // UI elements
+  const playBtn = document.getElementById('play-btn')!;
+  const stopBtn = document.getElementById('stop-btn')!;
+  const openBtn = document.getElementById('open-btn')!;
+  const saveBtn = document.getElementById('save-btn')!;
+  const fullscreenBtn = document.getElementById('fullscreen-btn')!;
+  const statusEl = document.getElementById('status')!;
+  const errorEl = document.getElementById('error')!;
 
   // Compile and play
   function compileAndPlay() {
     errorEl.textContent = '';
     try {
-      const eventList: EventList = compile_song(editor.value);
+      const source = editor.getValue();
+      const eventList: EventList = compile_song(source);
       player.load(eventList);
       player.play();
     } catch (e: any) {
@@ -136,38 +229,49 @@ async function main() {
   openBtn.addEventListener('click', async () => {
     const text = await openFile();
     if (text !== null) {
-      editor.value = text;
+      editor.setValue(text);
       saveSource(text);
     }
   });
 
-  saveBtn.addEventListener('click', () => saveFile(editor.value));
+  saveBtn.addEventListener('click', () => saveFile(editor.getValue()));
 
   fullscreenBtn.addEventListener('click', () => {
     document.documentElement.classList.toggle('fullscreen');
+    setTimeout(() => editor.layout(), 100);
   });
 
-  // Keyboard shortcuts
-  document.addEventListener('keydown', (e) => {
-    // Ctrl+Enter or Cmd+Enter to play
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      compileAndPlay();
-    }
-    // Escape to exit fullscreen
-    if (e.key === 'Escape') {
+  // Register Ctrl+Enter as a Monaco keybinding
+  editor.addAction({
+    id: 'songwalker.play',
+    label: 'Play Song',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+    run: () => compileAndPlay(),
+  });
+
+  // Escape to exit fullscreen
+  editor.addAction({
+    id: 'songwalker.exitFullscreen',
+    label: 'Exit Fullscreen',
+    keybindings: [monaco.KeyCode.Escape],
+    precondition: undefined,
+    run: () => {
       document.documentElement.classList.remove('fullscreen');
-    }
+      setTimeout(() => editor.layout(), 100);
+    },
   });
 
   // Display playback state
   player.onState((state) => {
     if (state.playing) {
-      statusEl.textContent = `Playing: beat ${state.currentBeat.toFixed(1)} / ${state.totalBeats.toFixed(1)} @ ${state.bpm} BPM`;
+      statusEl.textContent = `▶ ${state.currentBeat.toFixed(1)} / ${state.totalBeats.toFixed(1)}  @${state.bpm} BPM`;
     } else {
-      statusEl.textContent = `Stopped | ${state.totalBeats.toFixed(1)} beats @ ${state.bpm} BPM`;
+      statusEl.textContent = `${state.totalBeats.toFixed(1)} beats  @${state.bpm} BPM`;
     }
   });
+
+  // Focus the editor
+  editor.focus();
 }
 
 main().catch(console.error);

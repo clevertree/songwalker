@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules
 
 # Rust
 /target
@@ -28,5 +29,6 @@ npm-debug.log*
 # Build outputs
 /build
 /dist
+**/dist
 /out
 /pkg

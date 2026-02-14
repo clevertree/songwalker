@@ -169,7 +169,7 @@ Monaco Editor supports custom keybindings easily. We will map:
 ## 9. Phase 5: Website & Hosting
 
 ### A. Overview
-Create a public website (`songwalker.dev` or similar) that serves as both the project homepage and the primary way to use the editor. The editor should be the hero element on the front page — users should be able to start writing music immediately without signing up.
+Create a public website at [songwalker.net](https://songwalker.net) that serves as both the project homepage and the primary way to use the editor. The editor should be the hero element on the front page — users should be able to start writing music immediately without signing up.
 
 ### B. Editor Integration
 *   **Front-page Editor**: The Monaco-based editor is embedded directly on the landing page, pre-loaded with an example song.
