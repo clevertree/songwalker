@@ -33,9 +33,6 @@ npm-debug.log*
 /out
 /pkg
 
-# Generated WASM (rebuilt from source)
-songwalker_web/src/wasm/
-
 # Test artifacts
 *.wav
 test_song.sw
