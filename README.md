@@ -13,12 +13,14 @@ The compiler and audio engine are written in Rust, compiled to WebAssembly for t
 ## Quick Example
 
 ```
+const synth = Oscillator({type: 'triangle'});
 track.beatsPerMinute = 140;
 
-melody();
+melody(synth);
 
-track melody() {
-    track.duration = 1/4;
+track melody(inst) {
+    track.instrument = inst;
+    track.noteLength = 1/4;
 
     C4 /4
     E4 /4
@@ -37,7 +39,8 @@ track melody() {
 ## Features
 
 - **Minimalist notation** — `C4 /4` plays middle C for a quarter beat
-- **Tracks** — reusable musical phrases with `track name() { ... }`
+- **Instruments** — built-in oscillator presets with ADSR envelopes
+- **Independent tracks** — reusable phrases that receive instruments via parameters
 - **Control flow** — `for` loops, variables, nested track calls
 - **Modifiers** — velocity (`*90`), audible duration (`@1/4`), rests (standalone numbers)
 - **Chords** — simultaneous notes in one step
@@ -77,7 +80,7 @@ cargo run --manifest-path songwalker_cli/Cargo.toml -- --ast song.sw
 ### Development
 
 ```bash
-# Run Rust tests (60 tests)
+# Run Rust tests (68 tests)
 cd songwalker_core && cargo test
 
 # Build WASM
@@ -123,9 +126,40 @@ name();     // call the track
 ### Variables
 ```
 track.beatsPerMinute = 140;
-track.duration = 1/4;
-const x = 42;
+track.noteLength = 1/4;
+const synth = Oscillator({type: 'square', attack: 0.01, release: 0.2});
 ```
+
+### Instruments
+
+Instruments are created with `Oscillator({...})` and passed to tracks via parameters.
+Tracks are **independent** — they inherit parent state (BPM, instrument, noteLength) and can override it locally. Best practice is to pass instruments as parameters for reusable, portable tracks.
+
+```
+const lead = Oscillator({type: 'sawtooth', attack: 0.01, release: 0.4});
+const bass = Oscillator({type: 'square', sustain: 0.8});
+
+melody(lead);
+bassline(bass);
+
+track melody(inst) {
+    track.instrument = inst;
+    C4 /4  E4 /4  G4 /4
+}
+
+track bassline(inst) {
+    track.instrument = inst;
+    C2 /2  G2 /2
+}
+```
+
+**Available waveforms:** `sine`, `square`, `sawtooth`, `triangle` (default)
+
+**ADSR envelope options:** `attack`, `decay`, `sustain`, `release` (in seconds/level)
+
+**Other options:** `detune` (cents), `mixer` (gain level)
+
+String shorthand is also supported: `track.instrument = 'square';`
 
 ## Architecture
 

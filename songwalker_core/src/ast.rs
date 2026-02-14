@@ -111,6 +111,11 @@ pub enum Expr {
         function: String,
         args: Vec<Expr>,
     },
+    /// `Oscillator({type: 'square'})` — built-in preset call.
+    FunctionCall {
+        function: String,
+        args: Vec<Expr>,
+    },
     PropertyAccess {
         object: String,
         property: String,

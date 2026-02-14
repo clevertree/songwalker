@@ -611,7 +611,16 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                if self.check(&Token::Dot) {
+                if self.check(&Token::LParen) {
+                    // Function call: Name(args)
+                    self.advance(); // consume (
+                    let args = self.parse_call_args()?;
+                    self.expect(&Token::RParen)?;
+                    Ok(Expr::FunctionCall {
+                        function: name,
+                        args,
+                    })
+                } else if self.check(&Token::Dot) {
                     let target = self.parse_dotted_ident_rest(name.clone())?;
                     Ok(Expr::PropertyAccess {
                         object: name,

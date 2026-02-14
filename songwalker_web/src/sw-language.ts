@@ -157,7 +157,15 @@ export const completionItems: monaco.languages.CompletionItem[] = [
         kind: 3, // Function
         insertText: 'await loadPreset(${0})',
         insertTextRules: 4,
-        detail: 'Load an instrument preset',
+        detail: 'Load an instrument preset (legacy)',
+    },
+    {
+        label: 'Oscillator',
+        kind: 3, // Function
+        insertText: "Oscillator({type: '${1|sine,square,sawtooth,triangle|}'})",
+        insertTextRules: 4,
+        detail: 'Create an oscillator instrument',
+        documentation: "Built-in oscillator preset. Options: type (waveform), attack, decay, sustain, release, detune, mixer.",
     },
     {
         label: 'track.beatsPerMinute',

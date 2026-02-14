@@ -3,7 +3,7 @@
 //! The engine manages voices, processes events at the correct sample offsets,
 //! and produces interleaved stereo f32 output.
 
-use crate::compiler::{EndMode, EventKind, EventList};
+use crate::compiler::{EndMode, EventKind, EventList, InstrumentConfig};
 
 use super::mixer::Mixer;
 use super::voice::Voice;
@@ -64,6 +64,8 @@ struct ScheduledNote {
     release_sample: usize,
     frequency: f64,
     velocity: f64,
+    /// Instrument configuration for this note.
+    instrument: InstrumentConfig,
 }
 
 /// The audio rendering engine.
@@ -108,6 +110,7 @@ impl AudioEngine {
                 pitch,
                 velocity,
                 gate,
+                instrument,
                 ..
             } = &evt.kind
             {
@@ -123,6 +126,7 @@ impl AudioEngine {
                         release_sample: release,
                         frequency: freq,
                         velocity: *velocity / 127.0,
+                        instrument: instrument.clone(),
                     });
                 }
             }
@@ -132,8 +136,8 @@ impl AudioEngine {
         scheduled.sort_by_key(|n| n.start_sample);
 
         // Compute total output length based on EndMode
-        let release_env_seconds = 0.05; // matches the hardcoded envelope release
-        let release_env_samples = (release_env_seconds * self.sample_rate) as usize;
+        // Default envelope release is 0.3s (from Envelope::new)
+        let default_release = 0.3_f64;
         // Extra tail for effects (reverb, etc.) — future-proofing
         let effects_tail_samples = (0.5 * self.sample_rate) as usize;
 
@@ -144,10 +148,13 @@ impl AudioEngine {
                 cursor_samples.max(max_gate)
             }
             EndMode::Release => {
-                // End after all envelopes finish
+                // End after all envelopes finish (per-note release time)
                 let max_release = scheduled
                     .iter()
-                    .map(|n| n.release_sample + release_env_samples)
+                    .map(|n| {
+                        let rel = n.instrument.release.unwrap_or(default_release);
+                        n.release_sample + (rel * self.sample_rate) as usize
+                    })
                     .max()
                     .unwrap_or(0);
                 cursor_samples.max(max_release)
@@ -156,7 +163,10 @@ impl AudioEngine {
                 // End after all notes + effect tails finish
                 let max_tail = scheduled
                     .iter()
-                    .map(|n| n.release_sample + release_env_samples + effects_tail_samples)
+                    .map(|n| {
+                        let rel = n.instrument.release.unwrap_or(default_release);
+                        n.release_sample + (rel * self.sample_rate) as usize + effects_tail_samples
+                    })
                     .max()
                     .unwrap_or(0);
                 cursor_samples.max(max_tail)
@@ -181,11 +191,7 @@ impl AudioEngine {
             {
                 let note = &scheduled[next_note_idx];
                 if voices.len() < self.max_voices {
-                    let mut voice = Voice::new(self.sample_rate);
-                    voice.envelope.attack = 0.005;
-                    voice.envelope.decay = 0.1;
-                    voice.envelope.sustain = 0.6;
-                    voice.envelope.release = 0.05;
+                    let mut voice = Voice::with_config(self.sample_rate, &note.instrument);
                     voice.release_sample = note.release_sample;
                     voice.note_on(note.frequency, note.velocity);
                     voices.push(voice);
@@ -242,7 +248,7 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{EndMode, Event, EventKind, EventList};
+    use crate::compiler::{EndMode, Event, EventKind, EventList, InstrumentConfig};
 
     fn make_simple_song() -> EventList {
         EventList {
@@ -260,6 +266,7 @@ mod tests {
                         pitch: "C4".to_string(),
                         velocity: 100.0,
                         gate: 1.0,
+                        instrument: InstrumentConfig::default(),
                         source_start: 0,
                         source_end: 0,
                     },
@@ -270,6 +277,7 @@ mod tests {
                         pitch: "E4".to_string(),
                         velocity: 80.0,
                         gate: 1.0,
+                        instrument: InstrumentConfig::default(),
                         source_start: 0,
                         source_end: 0,
                     },
@@ -369,6 +377,7 @@ mod tests {
                     pitch: "A4".to_string(),
                     velocity: 100.0,
                     gate: 1.0,
+                    instrument: InstrumentConfig::default(),
                     source_start: 0,
                     source_end: 0,
                 },
@@ -384,6 +393,7 @@ mod tests {
                     pitch: "A4".to_string(),
                     velocity: 100.0,
                     gate: 1.0,
+                    instrument: InstrumentConfig::default(),
                     source_start: 0,
                     source_end: 0,
                 },
@@ -408,8 +418,8 @@ mod tests {
     fn notes_actually_stop_after_gate() {
         let engine = AudioEngine::new(44100.0);
         // Short note: gate = 0.1 beats at 120 BPM = 0.05s = 2205 samples
-        // Release envelope = 0.05s = 2205 samples
-        // So after ~4410 samples + some margin, output should be silent
+        // Default envelope release = 0.3s = 13230 samples
+        // So after ~15435 samples + margin, output should be silent
         let song = EventList {
             events: vec![
                 Event {
@@ -425,6 +435,7 @@ mod tests {
                         pitch: "A4".to_string(),
                         velocity: 100.0,
                         gate: 0.1,
+                        instrument: InstrumentConfig::default(),
                         source_start: 0,
                         source_end: 0,
                     },
@@ -436,7 +447,8 @@ mod tests {
 
         let audio = engine.render(&song);
         // Check samples well past the gate+release are silent
-        let check_start = 10000; // ~0.22s in, well past gate (0.05s) + release (0.05s)
+        // gate=0.05s + release=0.3s = 0.35s ≈ 15435 samples, check at 20000+
+        let check_start = 20000;
         let tail_max = audio[check_start..]
             .iter()
             .fold(0.0_f64, |m, &s| m.max(s.abs()));

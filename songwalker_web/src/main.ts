@@ -62,12 +62,13 @@ self.MonacoEnvironment = {
 // ── Example song ─────────────────────────────────────────
 
 const EXAMPLE_SONG = `// SongWalker Example — songwalker.net
+const synth = Oscillator({type: 'triangle'});
 track.beatsPerMinute = 140;
 
-riff();
+riff(synth);
 
-track riff() {
-    track.instrument = 'triangle';
+track riff(inst) {
+    track.instrument = inst;
     track.noteLength = 1/4;
 
     C4 /4

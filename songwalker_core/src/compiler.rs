@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::*;
@@ -18,6 +19,45 @@ pub enum EndMode {
 impl Default for EndMode {
     fn default() -> Self {
         EndMode::Tail
+    }
+}
+
+// ── Instrument Configuration ────────────────────────────────
+
+/// Built-in instrument configuration resolved at compile time.
+///
+/// Tracks are independent units — they receive instruments through parameters
+/// or inherit the parent track's instrument. The song context is passed
+/// implicitly, so `const` values at song level are accessible.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstrumentConfig {
+    /// Waveform type: "sine", "square", "sawtooth", "triangle".
+    pub waveform: String,
+    /// ADSR envelope attack time in seconds (None = use engine default).
+    pub attack: Option<f64>,
+    /// ADSR envelope decay time in seconds.
+    pub decay: Option<f64>,
+    /// ADSR envelope sustain level [0, 1].
+    pub sustain: Option<f64>,
+    /// ADSR envelope release time in seconds.
+    pub release: Option<f64>,
+    /// Detune in cents.
+    pub detune: Option<f64>,
+    /// Mix level [0, 1].
+    pub mixer: Option<f64>,
+}
+
+impl Default for InstrumentConfig {
+    fn default() -> Self {
+        InstrumentConfig {
+            waveform: "triangle".to_string(),
+            attack: None,
+            decay: None,
+            sustain: None,
+            release: None,
+            detune: None,
+            mixer: None,
+        }
     }
 }
 
@@ -50,6 +90,8 @@ pub enum EventKind {
         velocity: f64,
         /// Audible gate time in beats (how long the note sounds).
         gate: f64,
+        /// Instrument configuration for this note.
+        instrument: InstrumentConfig,
         /// Source byte offset (for editor highlighting).
         source_start: usize,
         /// Source byte end offset.
@@ -74,35 +116,37 @@ struct CompileCtx {
     default_note_length: f64,
     /// Song end mode.
     end_mode: EndMode,
-    /// Whether an instrument has been loaded (track.instrument = ...).
-    instrument_loaded: bool,
-    /// Strict mode: require instrument before notes (editor mode).
-    strict: bool,
+    /// Current instrument configuration (default = Triangle).
+    current_instrument: InstrumentConfig,
     /// Current cursor position in beats.
     cursor: f64,
     /// Collected events.
     events: Vec<Event>,
     /// Track definitions available for lookup.
     track_defs: Vec<TrackDef>,
+    /// Song-level const bindings: `const name = Oscillator({...})`.
+    consts: HashMap<String, InstrumentConfig>,
+    /// Active parameter bindings during track body compilation.
+    param_bindings: HashMap<String, InstrumentConfig>,
 }
 
 struct TrackDef {
     name: String,
-    #[allow(dead_code)]
     params: Vec<String>,
     body: Vec<TrackStatement>,
 }
 
 impl CompileCtx {
-    fn new(strict: bool) -> Self {
+    fn new(_strict: bool) -> Self {
         CompileCtx {
             default_note_length: 1.0, // default: 1 beat
             end_mode: EndMode::Tail,
-            instrument_loaded: false,
-            strict,
+            current_instrument: InstrumentConfig::default(),
             cursor: 0.0,
             events: Vec::new(),
             track_defs: Vec::new(),
+            consts: HashMap::new(),
+            param_bindings: HashMap::new(),
         }
     }
 
@@ -137,6 +181,7 @@ fn expr_to_string(expr: &Expr) -> String {
         Expr::StringLit(s) => s.clone(),
         Expr::Number(n) => format!("{n}"),
         Expr::RegexLit(s) => s.clone(),
+        Expr::FunctionCall { function, .. } => format!("{function}(...)"),
         _ => format!("{expr:?}"),
     }
 }
@@ -198,97 +243,262 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
             args,
             step,
         } => {
-            // Look up the track and inline it.
-            let track_body = ctx
-                .track_defs
-                .iter()
-                .find(|td| td.name == *name)
-                .map(|td| td.body.clone());
-
-            if let Some(body) = track_body {
-                let saved_cursor = ctx.cursor;
-                let saved_note_len = ctx.default_note_length;
-
-                // Compile the track body inline.
-                compile_track_body(ctx, &body)?;
-
-                // If play_duration is set, cap the track's extent.
-                if let Some(pd) = play_duration {
-                    let max_dur = duration_to_beats(pd, ctx.default_note_length);
-                    ctx.cursor = saved_cursor + max_dur;
-                }
-
-                ctx.default_note_length = saved_note_len;
-
-                // Apply step (rest after the track call).
-                if let Some(s) = step {
-                    let step_beats = duration_to_beats(s, ctx.default_note_length);
-                    ctx.cursor = saved_cursor + step_beats;
-                }
-            } else {
-                // Unknown track: emit as a TrackStart event.
-                let arg_strings: Vec<String> = args.iter().map(expr_to_string).collect();
-                ctx.emit(EventKind::TrackStart {
-                    track_name: name.clone(),
-                    velocity: *velocity,
-                    play_duration: play_duration
-                        .as_ref()
-                        .map(|d| duration_to_beats(d, ctx.default_note_length)),
-                    args: arg_strings,
-                });
-                if let Some(s) = step {
-                    ctx.cursor += duration_to_beats(s, ctx.default_note_length);
-                }
-            }
-            Ok(())
+            inline_track_call(ctx, name, velocity, play_duration, args, step)
         }
-        Statement::ConstDecl { .. } => {
-            // Const declarations are runtime concerns; skip for Phase 1.
+        Statement::ConstDecl { name, value } => {
+            // Resolve the expression to an InstrumentConfig and store it.
+            let config = evaluate_instrument_expr(ctx, value)?;
+            ctx.consts.insert(name.clone(), config);
             Ok(())
         }
         Statement::Assignment { target, value } => {
-            // Check for known properties.
-            if target == "track.beatsPerMinute" {
-                // BPM is a runtime property; store as event.
-                ctx.emit(EventKind::SetProperty {
-                    target: target.clone(),
-                    value: expr_to_string(value),
-                });
-            } else if target == "track.noteLength" || target == "track.duration" {
-                if let Expr::DurationLit(d) = value {
-                    ctx.default_note_length = duration_to_beats(d, ctx.default_note_length);
-                } else if let Expr::Number(n) = value {
-                    ctx.default_note_length = *n;
-                }
-            } else if target == "song.endMode" {
-                let mode_str = expr_to_string(value);
-                ctx.end_mode = match mode_str.as_str() {
-                    "gate" => EndMode::Gate,
-                    "release" => EndMode::Release,
-                    "tail" => EndMode::Tail,
-                    _ => {
-                        return Err(format!(
-                            "Unknown song.endMode '{}'. Expected 'gate', 'release', or 'tail'.",
-                            mode_str
-                        ));
-                    }
-                };
-            } else if target == "track.instrument" {
-                ctx.instrument_loaded = true;
-                ctx.emit(EventKind::SetProperty {
-                    target: target.clone(),
-                    value: expr_to_string(value),
-                });
-            } else {
-                ctx.emit(EventKind::SetProperty {
-                    target: target.clone(),
-                    value: expr_to_string(value),
-                });
-            }
-            Ok(())
+            compile_assignment(ctx, target, value)
         }
         Statement::Comment(_) => Ok(()),
     }
+}
+
+/// Evaluate an expression to an InstrumentConfig.
+fn evaluate_instrument_expr(ctx: &CompileCtx, expr: &Expr) -> Result<InstrumentConfig, String> {
+    match expr {
+        Expr::FunctionCall { function, args } => {
+            match function.as_str() {
+                "Oscillator" => {
+                    let mut config = InstrumentConfig::default();
+                    // First arg should be an ObjectLit with config keys.
+                    if let Some(Expr::ObjectLit(pairs)) = args.first() {
+                        for (key, value) in pairs {
+                            match key.as_str() {
+                                "type" => {
+                                    if let Expr::StringLit(s) = value {
+                                        config.waveform = s.clone();
+                                    }
+                                }
+                                "attack" => {
+                                    if let Expr::Number(n) = value {
+                                        config.attack = Some(*n);
+                                    }
+                                }
+                                "decay" => {
+                                    if let Expr::Number(n) = value {
+                                        config.decay = Some(*n);
+                                    }
+                                }
+                                "sustain" => {
+                                    if let Expr::Number(n) = value {
+                                        config.sustain = Some(*n);
+                                    }
+                                }
+                                "release" => {
+                                    if let Expr::Number(n) = value {
+                                        config.release = Some(*n);
+                                    }
+                                }
+                                "detune" => {
+                                    if let Expr::Number(n) = value {
+                                        config.detune = Some(*n);
+                                    }
+                                }
+                                "mixer" => {
+                                    if let Expr::Number(n) = value {
+                                        config.mixer = Some(*n);
+                                    }
+                                }
+                                _ => {} // ignore unknown keys
+                            }
+                        }
+                    }
+                    Ok(config)
+                }
+                _ => Err(format!("Unknown instrument preset '{function}'.")),
+            }
+        }
+        Expr::AwaitCall { function, args } => {
+            // Backward compat: `await loadPreset("Oscillator", {type:'square'})`
+            if function == "loadPreset" {
+                let mut config = InstrumentConfig::default();
+                // First arg might be a string identifying the preset type.
+                if let Some(Expr::StringLit(preset_name)) = args.first() {
+                    if preset_name == "Oscillator" {
+                        if let Some(Expr::ObjectLit(pairs)) = args.get(1) {
+                            for (key, value) in pairs {
+                                match key.as_str() {
+                                    "type" => {
+                                        if let Expr::StringLit(s) = value {
+                                            config.waveform = s.clone();
+                                        }
+                                    }
+                                    "attack" => {
+                                        if let Expr::Number(n) = value {
+                                            config.attack = Some(*n);
+                                        }
+                                    }
+                                    "decay" => {
+                                        if let Expr::Number(n) = value {
+                                            config.decay = Some(*n);
+                                        }
+                                    }
+                                    "sustain" => {
+                                        if let Expr::Number(n) = value {
+                                            config.sustain = Some(*n);
+                                        }
+                                    }
+                                    "release" => {
+                                        if let Expr::Number(n) = value {
+                                            config.release = Some(*n);
+                                        }
+                                    }
+                                    "detune" => {
+                                        if let Expr::Number(n) = value {
+                                            config.detune = Some(*n);
+                                        }
+                                    }
+                                    "mixer" => {
+                                        if let Expr::Number(n) = value {
+                                            config.mixer = Some(*n);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // else: unknown preset name, return default
+                }
+                Ok(config)
+            } else {
+                Ok(InstrumentConfig::default())
+            }
+        }
+        Expr::Identifier(name) => {
+            // Look up in param_bindings first, then consts.
+            if let Some(cfg) = ctx.param_bindings.get(name) {
+                Ok(cfg.clone())
+            } else if let Some(cfg) = ctx.consts.get(name) {
+                Ok(cfg.clone())
+            } else {
+                Err(format!("Unknown instrument '{name}'."))
+            }
+        }
+        Expr::StringLit(s) => {
+            // Shorthand: 'triangle', 'square', etc.
+            Ok(InstrumentConfig {
+                waveform: s.clone(),
+                ..InstrumentConfig::default()
+            })
+        }
+        _ => Err(format!("Cannot resolve expression as instrument: {expr:?}")),
+    }
+}
+
+/// Handle an assignment statement (works for both top-level and track body).
+fn compile_assignment(ctx: &mut CompileCtx, target: &str, value: &Expr) -> Result<(), String> {
+    if target == "track.beatsPerMinute" {
+        ctx.emit(EventKind::SetProperty {
+            target: target.to_string(),
+            value: expr_to_string(value),
+        });
+    } else if target == "track.noteLength" || target == "track.duration" {
+        if let Expr::DurationLit(d) = value {
+            ctx.default_note_length = duration_to_beats(d, ctx.default_note_length);
+        } else if let Expr::Number(n) = value {
+            ctx.default_note_length = *n;
+        }
+    } else if target == "song.endMode" {
+        let mode_str = expr_to_string(value);
+        ctx.end_mode = match mode_str.as_str() {
+            "gate" => EndMode::Gate,
+            "release" => EndMode::Release,
+            "tail" => EndMode::Tail,
+            _ => {
+                return Err(format!(
+                    "Unknown song.endMode '{}'. Expected 'gate', 'release', or 'tail'.",
+                    mode_str
+                ));
+            }
+        };
+    } else if target == "track.instrument" {
+        // Resolve the value to an InstrumentConfig.
+        let config = evaluate_instrument_expr(ctx, value)?;
+        ctx.current_instrument = config;
+        ctx.emit(EventKind::SetProperty {
+            target: target.to_string(),
+            value: expr_to_string(value),
+        });
+    } else {
+        ctx.emit(EventKind::SetProperty {
+            target: target.to_string(),
+            value: expr_to_string(value),
+        });
+    }
+    Ok(())
+}
+
+/// Inline a track call: resolve args → params, save/restore scope, compile body.
+fn inline_track_call(
+    ctx: &mut CompileCtx,
+    name: &str,
+    _velocity: &Option<f64>,
+    play_duration: &Option<DurationExpr>,
+    args: &[Expr],
+    step: &Option<DurationExpr>,
+) -> Result<(), String> {
+    let track_body = ctx
+        .track_defs
+        .iter()
+        .find(|td| td.name == name)
+        .map(|td| (td.params.clone(), td.body.clone()));
+
+    if let Some((params, body)) = track_body {
+        // Save parent scope.
+        let saved_cursor = ctx.cursor;
+        let saved_note_len = ctx.default_note_length;
+        let saved_instrument = ctx.current_instrument.clone();
+        let saved_params = ctx.param_bindings.clone();
+
+        // Resolve args → params: zip track def params with call args.
+        let mut new_bindings = ctx.param_bindings.clone();
+        for (param_name, arg_expr) in params.iter().zip(args.iter()) {
+            let config = evaluate_instrument_expr(ctx, arg_expr)?;
+            new_bindings.insert(param_name.clone(), config);
+        }
+        ctx.param_bindings = new_bindings;
+
+        // Compile the track body inline (inherits parent state).
+        compile_track_body(ctx, &body)?;
+
+        // If play_duration is set, cap the track's extent.
+        if let Some(pd) = play_duration {
+            let max_dur = duration_to_beats(pd, ctx.default_note_length);
+            ctx.cursor = saved_cursor + max_dur;
+        }
+
+        // Restore parent scope.
+        ctx.default_note_length = saved_note_len;
+        ctx.current_instrument = saved_instrument;
+        ctx.param_bindings = saved_params;
+
+        // Apply step (rest after the track call).
+        if let Some(s) = step {
+            let step_beats = duration_to_beats(s, ctx.default_note_length);
+            ctx.cursor = saved_cursor + step_beats;
+        }
+    } else {
+        // Unknown track: emit as a TrackStart event.
+        let arg_strings: Vec<String> = args.iter().map(expr_to_string).collect();
+        ctx.emit(EventKind::TrackStart {
+            track_name: name.to_string(),
+            velocity: *_velocity,
+            play_duration: play_duration
+                .as_ref()
+                .map(|d| duration_to_beats(d, ctx.default_note_length)),
+            args: arg_strings,
+        });
+        if let Some(s) = step {
+            ctx.cursor += duration_to_beats(s, ctx.default_note_length);
+        }
+    }
+    Ok(())
 }
 
 fn compile_track_body(ctx: &mut CompileCtx, body: &[TrackStatement]) -> Result<(), String> {
@@ -308,12 +518,6 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             span_start,
             span_end,
         } => {
-            if ctx.strict && !ctx.instrument_loaded {
-                return Err(format!(
-                    "No instrument loaded. Set track.instrument before playing notes. [{}:{}]",
-                    span_start, span_end
-                ));
-            }
             let vel = velocity.unwrap_or(100.0);
             let audible = ctx.resolve_duration(audible_duration);
             let step = ctx.resolve_duration(step_duration);
@@ -322,6 +526,7 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                 pitch: pitch.clone(),
                 velocity: vel,
                 gate: audible,
+                instrument: ctx.current_instrument.clone(),
                 source_start: *span_start,
                 source_end: *span_end,
             });
@@ -339,12 +544,6 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                 .as_ref()
                 .map(|d| duration_to_beats(d, ctx.default_note_length));
 
-            if ctx.strict && !ctx.instrument_loaded {
-                return Err(format!(
-                    "No instrument loaded. Set track.instrument before playing notes. [{}:{}]",
-                    span_start, span_end
-                ));
-            }
             for note in notes {
                 let note_dur = note
                     .audible_duration
@@ -357,6 +556,7 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                     pitch: note.pitch.clone(),
                     velocity: 100.0,
                     gate: note_dur,
+                    instrument: ctx.current_instrument.clone(),
                     source_start: *span_start,
                     source_end: *span_end,
                 });
@@ -371,25 +571,7 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             Ok(())
         }
         TrackStatement::Assignment { target, value } => {
-            if target == "track.noteLength" || target == "track.duration" {
-                if let Expr::DurationLit(d) = value {
-                    ctx.default_note_length = duration_to_beats(d, ctx.default_note_length);
-                } else if let Expr::Number(n) = value {
-                    ctx.default_note_length = *n;
-                }
-            } else if target == "track.instrument" {
-                ctx.instrument_loaded = true;
-                ctx.emit(EventKind::SetProperty {
-                    target: target.clone(),
-                    value: expr_to_string(value),
-                });
-            } else {
-                ctx.emit(EventKind::SetProperty {
-                    target: target.clone(),
-                    value: expr_to_string(value),
-                });
-            }
-            Ok(())
+            compile_assignment(ctx, target, value)
         }
         TrackStatement::ForLoop {
             init: _,
@@ -410,43 +592,7 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             args,
             step,
         } => {
-            // Look up and inline sub-track.
-            let track_body = {
-                // Borrow ctx.track_defs briefly to clone.
-                ctx.track_defs
-                    .iter()
-                    .find(|td| td.name == *name)
-                    .map(|td| td.body.clone())
-            };
-
-            if let Some(body) = track_body {
-                let saved_cursor = ctx.cursor;
-                let saved_note_len = ctx.default_note_length;
-                compile_track_body(ctx, &body)?;
-
-                if let Some(pd) = play_duration {
-                    ctx.cursor = saved_cursor + duration_to_beats(pd, ctx.default_note_length);
-                }
-                ctx.default_note_length = saved_note_len;
-
-                if let Some(s) = step {
-                    ctx.cursor = saved_cursor + duration_to_beats(s, ctx.default_note_length);
-                }
-            } else {
-                let arg_strings: Vec<String> = args.iter().map(expr_to_string).collect();
-                ctx.emit(EventKind::TrackStart {
-                    track_name: name.clone(),
-                    velocity: *velocity,
-                    play_duration: play_duration
-                        .as_ref()
-                        .map(|d| duration_to_beats(d, ctx.default_note_length)),
-                    args: arg_strings,
-                });
-                if let Some(s) = step {
-                    ctx.cursor += duration_to_beats(s, ctx.default_note_length);
-                }
-            }
-            Ok(())
+            inline_track_call(ctx, name, velocity, play_duration, args, step)
         }
         TrackStatement::Comment(_) => Ok(()),
     }
@@ -656,7 +802,8 @@ t();
     }
 
     #[test]
-    fn test_strict_mode_no_instrument_error() {
+    fn test_default_instrument_on_notes() {
+        // Notes without explicit instrument get the default Triangle config.
         let program = parse(
             r#"
 track riff() {
@@ -667,27 +814,20 @@ riff();
         )
         .unwrap();
 
-        // Lenient mode (CLI/render): should succeed
-        assert!(compile(&program).is_ok());
-
-        // Strict mode (editor): should fail with source location
-        let err = compile_strict(&program).unwrap_err();
-        assert!(
-            err.contains("No instrument loaded"),
-            "Expected instrument error, got: {err}"
-        );
-        assert!(
-            err.contains('[') && err.contains(':'),
-            "Expected source location [start:end] in error, got: {err}"
-        );
+        let events = compile(&program).unwrap();
+        let note = events.events.iter().find(|e| matches!(&e.kind, EventKind::Note { .. })).unwrap();
+        if let EventKind::Note { instrument, .. } = &note.kind {
+            assert_eq!(instrument.waveform, "triangle");
+        }
     }
 
     #[test]
-    fn test_strict_mode_with_instrument_ok() {
+    fn test_const_oscillator_instrument() {
         let program = parse(
             r#"
+const synth = Oscillator({type: 'square'});
 track riff() {
-    track.instrument = 'triangle';
+    track.instrument = synth;
     C3 /4
 }
 riff();
@@ -695,16 +835,82 @@ riff();
         )
         .unwrap();
 
-        // Strict mode should succeed when instrument is set
-        assert!(compile_strict(&program).is_ok());
+        let events = compile(&program).unwrap();
+        let note = events.events.iter().find(|e| matches!(&e.kind, EventKind::Note { .. })).unwrap();
+        if let EventKind::Note { instrument, .. } = &note.kind {
+            assert_eq!(instrument.waveform, "square");
+        }
     }
 
     #[test]
-    fn test_strict_mode_instrument_at_top_level() {
+    fn test_track_param_instrument() {
+        // Instrument passed as track parameter — track independence.
         let program = parse(
             r#"
-track.instrument = 'triangle';
+const synth = Oscillator({type: 'sawtooth', attack: 0.05});
+melody(synth);
+
+track melody(inst) {
+    track.instrument = inst;
+    C4 /4
+    E4 /4
+}
+"#,
+        )
+        .unwrap();
+
+        let events = compile(&program).unwrap();
+        let notes: Vec<_> = events.events.iter().filter(|e| matches!(&e.kind, EventKind::Note { .. })).collect();
+        assert_eq!(notes.len(), 2);
+        for note in &notes {
+            if let EventKind::Note { instrument, .. } = &note.kind {
+                assert_eq!(instrument.waveform, "sawtooth");
+                assert_eq!(instrument.attack, Some(0.05));
+            }
+        }
+    }
+
+    #[test]
+    fn test_track_scope_isolation() {
+        // Tracks inherit parent state but don't leak changes back.
+        let program = parse(
+            r#"
+const sq = Oscillator({type: 'square'});
+const tri = Oscillator({type: 'triangle'});
+
+bass(sq);
+melody(tri);
+
+track bass(inst) {
+    track.instrument = inst;
+    C2 /4
+}
+
+track melody(inst) {
+    track.instrument = inst;
+    C4 /4
+}
+"#,
+        )
+        .unwrap();
+
+        let events = compile(&program).unwrap();
+        let notes: Vec<_> = events.events.iter().filter_map(|e| match &e.kind {
+            EventKind::Note { pitch, instrument, .. } => Some((pitch.as_str(), instrument.waveform.as_str())),
+            _ => None,
+        }).collect();
+
+        // bass note should be square, melody note should be triangle
+        assert!(notes.iter().any(|(p, w)| *p == "C2" && *w == "square"));
+        assert!(notes.iter().any(|(p, w)| *p == "C4" && *w == "triangle"));
+    }
+
+    #[test]
+    fn test_string_shorthand_instrument() {
+        let program = parse(
+            r#"
 track riff() {
+    track.instrument = 'square';
     C3 /4
 }
 riff();
@@ -712,7 +918,53 @@ riff();
         )
         .unwrap();
 
-        // Top-level track.instrument should satisfy strict mode
-        assert!(compile_strict(&program).is_ok());
+        let events = compile(&program).unwrap();
+        let note = events.events.iter().find(|e| matches!(&e.kind, EventKind::Note { .. })).unwrap();
+        if let EventKind::Note { instrument, .. } = &note.kind {
+            assert_eq!(instrument.waveform, "square");
+        }
+    }
+
+    #[test]
+    fn test_inline_instrument_in_track() {
+        let program = parse(
+            r#"
+track riff() {
+    track.instrument = Oscillator({type: 'sine', release: 0.5});
+    C3 /4
+}
+riff();
+"#,
+        )
+        .unwrap();
+
+        let events = compile(&program).unwrap();
+        let note = events.events.iter().find(|e| matches!(&e.kind, EventKind::Note { .. })).unwrap();
+        if let EventKind::Note { instrument, .. } = &note.kind {
+            assert_eq!(instrument.waveform, "sine");
+            assert_eq!(instrument.release, Some(0.5));
+        }
+    }
+
+    #[test]
+    fn test_instrument_inherits_from_parent() {
+        // Track inherits parent's instrument when not overridden.
+        let program = parse(
+            r#"
+track.instrument = Oscillator({type: 'sawtooth'});
+riff();
+
+track riff() {
+    C3 /4
+}
+"#,
+        )
+        .unwrap();
+
+        let events = compile(&program).unwrap();
+        let note = events.events.iter().find(|e| matches!(&e.kind, EventKind::Note { .. })).unwrap();
+        if let EventKind::Note { instrument, .. } = &note.kind {
+            assert_eq!(instrument.waveform, "sawtooth");
+        }
     }
 }

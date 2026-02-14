@@ -1,5 +1,7 @@
 //! Voice — A single note instance combining oscillator + envelope.
 
+use crate::compiler::InstrumentConfig;
+
 use super::envelope::Envelope;
 use super::oscillator::{Oscillator, Waveform};
 
@@ -16,11 +18,53 @@ pub struct Voice {
     finished: bool,
 }
 
+/// Parse a waveform string to a Waveform enum value.
+fn parse_waveform(s: &str) -> Waveform {
+    match s {
+        "sine" => Waveform::Sine,
+        "square" => Waveform::Square,
+        "sawtooth" | "saw" => Waveform::Sawtooth,
+        "triangle" => Waveform::Triangle,
+        _ => Waveform::Triangle,
+    }
+}
+
 impl Voice {
     pub fn new(sample_rate: f64) -> Self {
         Voice {
             oscillator: Oscillator::new(Waveform::Triangle, sample_rate),
             envelope: Envelope::new(sample_rate),
+            velocity: 1.0,
+            release_sample: usize::MAX,
+            finished: false,
+        }
+    }
+
+    /// Create a voice configured from an InstrumentConfig.
+    pub fn with_config(sample_rate: f64, config: &InstrumentConfig) -> Self {
+        let waveform = parse_waveform(&config.waveform);
+        let mut osc = Oscillator::new(waveform, sample_rate);
+        if let Some(detune) = config.detune {
+            osc.detune = detune;
+        }
+
+        let mut env = Envelope::new(sample_rate);
+        if let Some(a) = config.attack {
+            env.attack = a;
+        }
+        if let Some(d) = config.decay {
+            env.decay = d;
+        }
+        if let Some(s) = config.sustain {
+            env.sustain = s;
+        }
+        if let Some(r) = config.release {
+            env.release = r;
+        }
+
+        Voice {
+            oscillator: osc,
+            envelope: env,
             velocity: 1.0,
             release_sample: usize::MAX,
             finished: false,
