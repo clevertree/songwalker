@@ -40,7 +40,7 @@ export class SongPlayer {
 
     private readonly SAMPLE_RATE = 44100;
 
-    constructor() {}
+    constructor() { }
 
     /** Register a callback for state changes. */
     onState(cb: OnStateChange): void {

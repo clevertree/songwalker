@@ -74,6 +74,10 @@ struct CompileCtx {
     default_note_length: f64,
     /// Song end mode.
     end_mode: EndMode,
+    /// Whether an instrument has been loaded (track.instrument = ...).
+    instrument_loaded: bool,
+    /// Strict mode: require instrument before notes (editor mode).
+    strict: bool,
     /// Current cursor position in beats.
     cursor: f64,
     /// Collected events.
@@ -90,10 +94,12 @@ struct TrackDef {
 }
 
 impl CompileCtx {
-    fn new() -> Self {
+    fn new(strict: bool) -> Self {
         CompileCtx {
             default_note_length: 1.0, // default: 1 beat
             end_mode: EndMode::Tail,
+            instrument_loaded: false,
+            strict,
             cursor: 0.0,
             events: Vec::new(),
             track_defs: Vec::new(),
@@ -142,7 +148,17 @@ fn expr_to_string(expr: &Expr) -> String {
 /// Phase 1: Compiles a single-pass arrangement. Tracks are inlined,
 /// for-loops are unrolled, and the output is a flat timeline.
 pub fn compile(program: &Program) -> Result<EventList, String> {
-    let mut ctx = CompileCtx::new();
+    compile_inner(program, false)
+}
+
+/// Compile with strict validation (editor mode).
+/// Errors if a note is played before track.instrument is set.
+pub fn compile_strict(program: &Program) -> Result<EventList, String> {
+    compile_inner(program, true)
+}
+
+fn compile_inner(program: &Program, strict: bool) -> Result<EventList, String> {
+    let mut ctx = CompileCtx::new(strict);
 
     // First pass: collect track definitions.
     for stmt in &program.statements {
@@ -257,6 +273,12 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
                         ));
                     }
                 };
+            } else if target == "track.instrument" {
+                ctx.instrument_loaded = true;
+                ctx.emit(EventKind::SetProperty {
+                    target: target.clone(),
+                    value: expr_to_string(value),
+                });
             } else {
                 ctx.emit(EventKind::SetProperty {
                     target: target.clone(),
@@ -286,6 +308,12 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             span_start,
             span_end,
         } => {
+            if ctx.strict && !ctx.instrument_loaded {
+                return Err(format!(
+                    "No instrument loaded. Set track.instrument before playing notes. [{}:{}]",
+                    span_start, span_end
+                ));
+            }
             let vel = velocity.unwrap_or(100.0);
             let audible = ctx.resolve_duration(audible_duration);
             let step = ctx.resolve_duration(step_duration);
@@ -311,6 +339,12 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                 .as_ref()
                 .map(|d| duration_to_beats(d, ctx.default_note_length));
 
+            if ctx.strict && !ctx.instrument_loaded {
+                return Err(format!(
+                    "No instrument loaded. Set track.instrument before playing notes. [{}:{}]",
+                    span_start, span_end
+                ));
+            }
             for note in notes {
                 let note_dur = note
                     .audible_duration
@@ -343,6 +377,12 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                 } else if let Expr::Number(n) = value {
                     ctx.default_note_length = *n;
                 }
+            } else if target == "track.instrument" {
+                ctx.instrument_loaded = true;
+                ctx.emit(EventKind::SetProperty {
+                    target: target.clone(),
+                    value: expr_to_string(value),
+                });
             } else {
                 ctx.emit(EventKind::SetProperty {
                     target: target.clone(),
@@ -613,5 +653,66 @@ t();
 
         assert_eq!(notes[0], (0.0, "C3"));
         assert_eq!(notes[1], (0.25, "D3"));
+    }
+
+    #[test]
+    fn test_strict_mode_no_instrument_error() {
+        let program = parse(
+            r#"
+track riff() {
+    C3 /4
+}
+riff();
+"#,
+        )
+        .unwrap();
+
+        // Lenient mode (CLI/render): should succeed
+        assert!(compile(&program).is_ok());
+
+        // Strict mode (editor): should fail with source location
+        let err = compile_strict(&program).unwrap_err();
+        assert!(
+            err.contains("No instrument loaded"),
+            "Expected instrument error, got: {err}"
+        );
+        assert!(
+            err.contains('[') && err.contains(':'),
+            "Expected source location [start:end] in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_with_instrument_ok() {
+        let program = parse(
+            r#"
+track riff() {
+    track.instrument = 'triangle';
+    C3 /4
+}
+riff();
+"#,
+        )
+        .unwrap();
+
+        // Strict mode should succeed when instrument is set
+        assert!(compile_strict(&program).is_ok());
+    }
+
+    #[test]
+    fn test_strict_mode_instrument_at_top_level() {
+        let program = parse(
+            r#"
+track.instrument = 'triangle';
+track riff() {
+    C3 /4
+}
+riff();
+"#,
+        )
+        .unwrap();
+
+        // Top-level track.instrument should satisfy strict mode
+        assert!(compile_strict(&program).is_ok());
     }
 }

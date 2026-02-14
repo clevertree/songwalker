@@ -1,7 +1,8 @@
 /* @ts-self-types="./songwalker_core.d.ts" */
 
 /**
- * WASM-exposed: compile `.sw` source into a JSON event list.
+ * WASM-exposed: compile `.sw` source into a JSON event list (strict/editor mode).
+ * Errors if a note plays before track.instrument is set.
  * @param {string} source
  * @returns {any}
  */

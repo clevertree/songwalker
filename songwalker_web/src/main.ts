@@ -67,6 +67,7 @@ track.beatsPerMinute = 140;
 riff();
 
 track riff() {
+    track.instrument = 'triangle';
     track.noteLength = 1/4;
 
     C4 /4
@@ -147,6 +148,44 @@ async function saveFile(source: string): Promise<void> {
         a.download = 'song.sw';
         a.click();
         URL.revokeObjectURL(url);
+    }
+}
+
+// ── Error location markers ───────────────────────────────
+
+/** Parse `[start:end]` from an error message and underline the range in the editor. */
+function showErrorLocation(editor: monaco.editor.IStandaloneCodeEditor, msg: string): void {
+    const match = msg.match(/\[(\d+):(\d+)\]/);
+    if (!match) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const startOffset = parseInt(match[1], 10);
+    const endOffset = parseInt(match[2], 10);
+    const startPos = model.getPositionAt(startOffset);
+    const endPos = model.getPositionAt(endOffset);
+
+    monaco.editor.setModelMarkers(model, 'songwalker', [
+        {
+            severity: monaco.MarkerSeverity.Error,
+            message: msg.replace(/\s*\[\d+:\d+\]/, ''),
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column,
+        },
+    ]);
+
+    // Reveal the error location
+    editor.revealPositionInCenter(startPos);
+}
+
+/** Clear all error markers. */
+function clearErrorMarkers(editor: monaco.editor.IStandaloneCodeEditor): void {
+    const model = editor.getModel();
+    if (model) {
+        monaco.editor.setModelMarkers(model, 'songwalker', []);
     }
 }
 
@@ -550,6 +589,7 @@ async function main() {
     // Compile and play using Rust DSP engine
     function compileAndPlay() {
         errorEl.textContent = '';
+        clearErrorMarkers(editor);
         try {
             const source = editor.getValue();
             // Compile to get event list (for highlighting)
@@ -562,19 +602,24 @@ async function main() {
                 highlighter.start();
             });
         } catch (e: any) {
-            errorEl.textContent = String(e);
+            const msg = String(e);
+            errorEl.textContent = msg;
+            showErrorLocation(editor, msg);
         }
     }
 
     // Export as WAV
     function exportWav() {
         errorEl.textContent = '';
+        clearErrorMarkers(editor);
         try {
             const source = editor.getValue();
             compile_song(source); // validate first
             player.exportWav(source);
         } catch (e: any) {
-            errorEl.textContent = String(e);
+            const msg = String(e);
+            errorEl.textContent = msg;
+            showErrorLocation(editor, msg);
         }
     }
 

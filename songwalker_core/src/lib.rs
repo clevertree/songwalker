@@ -18,12 +18,13 @@ pub fn parse(input: &str) -> Result<ast::Program, SongWalkerError> {
     Ok(parser.parse_program()?)
 }
 
-/// WASM-exposed: compile `.sw` source into a JSON event list.
+/// WASM-exposed: compile `.sw` source into a JSON event list (strict/editor mode).
+/// Errors if a note plays before track.instrument is set.
 #[wasm_bindgen]
 pub fn compile_song(source: &str) -> Result<JsValue, JsValue> {
     let program = parse(source).map_err(|e| JsValue::from_str(&format!("{e}")))?;
     let event_list =
-        compiler::compile(&program).map_err(|e| JsValue::from_str(&e))?;
+        compiler::compile_strict(&program).map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&event_list).map_err(|e| JsValue::from_str(&format!("{e}")))
 }
 
