@@ -10,6 +10,8 @@ pub struct Voice {
     pub envelope: Envelope,
     /// Velocity gain [0, 1].
     pub velocity: f64,
+    /// Sample offset when this voice should be released (gate off).
+    pub release_sample: usize,
     /// Whether this voice has been released and envelope is done.
     finished: bool,
 }
@@ -20,6 +22,7 @@ impl Voice {
             oscillator: Oscillator::new(Waveform::Triangle, sample_rate),
             envelope: Envelope::new(sample_rate),
             velocity: 1.0,
+            release_sample: usize::MAX,
             finished: false,
         }
     }

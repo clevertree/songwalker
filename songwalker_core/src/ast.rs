@@ -40,12 +40,20 @@ pub enum TrackStatement {
         velocity: Option<f64>,
         audible_duration: Option<DurationExpr>,
         step_duration: Option<DurationExpr>,
+        /// Source byte offset (start).
+        span_start: usize,
+        /// Source byte offset (end).
+        span_end: usize,
     },
     /// `[C3@2, E3, G3]@dur /step`
     Chord {
         notes: Vec<ChordNote>,
         audible_duration: Option<DurationExpr>,
         step_duration: Option<DurationExpr>,
+        /// Source byte offset (start).
+        span_start: usize,
+        /// Source byte offset (end).
+        span_end: usize,
     },
     /// Standalone number = rest for N beats.
     Rest(DurationExpr),

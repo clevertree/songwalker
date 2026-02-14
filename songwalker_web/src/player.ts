@@ -3,16 +3,10 @@
  *
  * Uses the Rust DSP engine (via WASM) to pre-render audio,
  * then plays it through a standard AudioBufferSourceNode.
- * This ensures deterministic, cross-platform audio output.
+ * Routes through an AnalyserNode for real-time visualisation.
  */
 
 import { render_song_samples, render_song_wav } from './wasm/songwalker_core.js';
-
-// Re-export types for backward compatibility
-export interface EventList {
-    events: any[];
-    total_beats: number;
-}
 
 // ── Player State ───────────────────────────────────────────
 
@@ -27,38 +21,55 @@ export type OnStateChange = (state: PlayerState) => void;
 
 /**
  * Pre-renders audio via Rust WASM DSP engine, then plays it.
+ * Exposes an AnalyserNode and rendered samples for visualisation.
  */
 export class SongPlayer {
     private ctx: AudioContext | null = null;
     private sourceNode: AudioBufferSourceNode | null = null;
+    private analyser: AnalyserNode | null = null;
+    private gainNode: GainNode | null = null;
     private totalBeats = 0;
     private bpm = 120;
     private startTime = 0;
     private stateTimer: number | null = null;
     private playing = false;
     private onStateChange: OnStateChange | null = null;
-    private currentSource: string = '';
+
+    /** The most recently rendered audio samples (mono f32). */
+    public renderedSamples: Float32Array | null = null;
 
     private readonly SAMPLE_RATE = 44100;
 
-    constructor() { }
+    constructor() {}
 
-    /**
-     * Register a callback for state changes.
-     */
+    /** Register a callback for state changes. */
     onState(cb: OnStateChange): void {
         this.onStateChange = cb;
     }
 
-    /**
-     * Compile, render, and play the song from source code.
-     */
+    /** Get the AnalyserNode (created on first play). */
+    getAnalyser(): AnalyserNode | null {
+        return this.analyser;
+    }
+
+    /** Sample rate used for rendering. */
+    get sampleRate(): number {
+        return this.SAMPLE_RATE;
+    }
+
+    /** Compile, render, and play the song from source code. */
     async playSource(source: string): Promise<void> {
         this.stop();
-        this.currentSource = source;
 
         if (!this.ctx) {
             this.ctx = new AudioContext({ sampleRate: this.SAMPLE_RATE });
+            // Persistent analyser + gain — recreated only once
+            this.analyser = this.ctx.createAnalyser();
+            this.analyser.fftSize = 2048;
+            this.analyser.smoothingTimeConstant = 0.8;
+            this.gainNode = this.ctx.createGain();
+            this.gainNode.connect(this.analyser);
+            this.analyser.connect(this.ctx.destination);
         }
         if (this.ctx.state === 'suspended') {
             await this.ctx.resume();
@@ -66,23 +77,21 @@ export class SongPlayer {
 
         // Render audio via Rust DSP engine
         const samples = render_song_samples(source, this.SAMPLE_RATE);
+        this.renderedSamples = samples;
         if (samples.length === 0) {
             this.emitState();
             return;
         }
 
-        // Extract BPM and total beats from a compile pass
-        // (render_song_samples doesn't return metadata, so we parse it)
         this.extractMetadata(source);
 
-        // Create an AudioBuffer from the rendered samples
+        // Create AudioBuffer and route through analyser
         const buffer = this.ctx.createBuffer(1, samples.length, this.SAMPLE_RATE);
         buffer.copyToChannel(samples, 0);
 
-        // Create and start source node
         this.sourceNode = this.ctx.createBufferSource();
         this.sourceNode.buffer = buffer;
-        this.sourceNode.connect(this.ctx.destination);
+        this.sourceNode.connect(this.gainNode!);
 
         this.playing = true;
         this.startTime = this.ctx.currentTime;
@@ -96,9 +105,7 @@ export class SongPlayer {
         this.emitState();
     }
 
-    /**
-     * Stop playback.
-     */
+    /** Stop playback. */
     stop(): void {
         if (this.sourceNode) {
             try {
@@ -117,9 +124,7 @@ export class SongPlayer {
         this.emitState();
     }
 
-    /**
-     * Export the current song as a WAV file download.
-     */
+    /** Export the current song as a WAV file download. */
     exportWav(source: string, filename = 'song.wav'): void {
         const wavBytes = render_song_wav(source, this.SAMPLE_RATE);
         const blob = new Blob([wavBytes], { type: 'audio/wav' });
@@ -131,29 +136,35 @@ export class SongPlayer {
         URL.revokeObjectURL(url);
     }
 
-    /**
-     * Get current playback position in beats.
-     */
+    /** Get current playback position in beats. */
     getCurrentBeat(): number {
         if (!this.playing || !this.ctx) return 0;
         const elapsed = this.ctx.currentTime - this.startTime;
         return (elapsed * this.bpm) / 60;
     }
 
+    /** Fraction of playback elapsed (0..1). */
+    getProgress(): number {
+        if (!this.playing || this.totalBeats <= 0) return 0;
+        return Math.min(this.getCurrentBeat() / this.totalBeats, 1);
+    }
+
     get isPlaying(): boolean {
         return this.playing;
     }
 
+    get currentBPM(): number {
+        return this.bpm;
+    }
+
+    get currentTotalBeats(): number {
+        return this.totalBeats;
+    }
+
     private extractMetadata(source: string): void {
-        // Extract BPM from source text (simple regex)
         const bpmMatch = source.match(/beatsPerMinute\s*=\s*(\d+)/);
         this.bpm = bpmMatch ? parseInt(bpmMatch[1], 10) : 120;
-
-        // Estimate total beats from the rendered audio length
-        // This is a rough approximation; the compiler has the exact value
         try {
-            // We can use compile_song to get metadata, but to avoid importing 
-            // it here, we estimate from the rendered samples
             const durationSec = this.sourceNode?.buffer?.duration ?? 0;
             this.totalBeats = (durationSec * this.bpm) / 60;
         } catch {

@@ -299,6 +299,7 @@ impl Parser {
     }
 
     fn parse_ident_statement_in_track(&mut self) -> Result<TrackStatement, ParseError> {
+        let start_span = self.span().start;
         let name = self.expect_ident()?;
 
         // Check for assignment: `name.prop = value` or `name = value`
@@ -338,11 +339,14 @@ impl Parser {
         } else {
             // Note event: pitch was `name`, parse optional step duration
             let step = self.try_parse_duration()?;
+            let end_span = self.tokens[self.pos.saturating_sub(1)].span.end;
             Ok(TrackStatement::NoteEvent {
                 pitch: name,
                 velocity,
                 audible_duration: play_duration,
                 step_duration: step,
+                span_start: start_span,
+                span_end: end_span,
             })
         }
     }
@@ -388,6 +392,7 @@ impl Parser {
     // ── Chord ───────────────────────────────────────────────
 
     fn parse_chord(&mut self) -> Result<TrackStatement, ParseError> {
+        let start_span = self.span().start;
         self.expect(&Token::LBracket)?;
         let mut notes = Vec::new();
         if !self.check(&Token::RBracket) {
@@ -402,11 +407,14 @@ impl Parser {
         // Parse optional modifiers on the whole chord
         let (_, audible_duration) = self.parse_modifiers()?;
         let step_duration = self.try_parse_duration()?;
+        let end_span = self.tokens[self.pos.saturating_sub(1)].span.end;
 
         Ok(TrackStatement::Chord {
             notes,
             audible_duration,
             step_duration,
+            span_start: start_span,
+            span_end: end_span,
         })
     }
 
@@ -738,6 +746,7 @@ track t() {
                     velocity,
                     audible_duration,
                     step_duration,
+                    ..
                 } => {
                     assert_eq!(pitch, "C2");
                     assert_eq!(*velocity, Some(90.0));
@@ -833,6 +842,7 @@ track t() {
                     notes,
                     audible_duration,
                     step_duration,
+                    ..
                 } => {
                     assert_eq!(notes.len(), 3);
                     assert_eq!(notes[0].pitch, "C3");

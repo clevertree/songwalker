@@ -3,7 +3,7 @@
 //! The engine manages voices, processes events at the correct sample offsets,
 //! and produces interleaved stereo f32 output.
 
-use crate::compiler::{EventKind, EventList};
+use crate::compiler::{EndMode, EventKind, EventList};
 
 use super::mixer::Mixer;
 use super::voice::Voice;
@@ -96,7 +96,7 @@ impl AudioEngine {
             }
         }
 
-        let total_samples = {
+        let cursor_samples = {
             let seconds = event_list.total_beats * 60.0 / bpm;
             (seconds * self.sample_rate) as usize
         };
@@ -107,7 +107,8 @@ impl AudioEngine {
             if let EventKind::Note {
                 pitch,
                 velocity,
-                duration,
+                gate,
+                ..
             } = &evt.kind
             {
                 if let Some(freq) = note_to_frequency(pitch) {
@@ -115,8 +116,8 @@ impl AudioEngine {
                         let s = evt.time * 60.0 / bpm;
                         (s * self.sample_rate) as usize
                     };
-                    let dur_seconds = duration * 60.0 / bpm;
-                    let release = start + (dur_seconds * self.sample_rate) as usize;
+                    let gate_seconds = gate * 60.0 / bpm;
+                    let release = start + (gate_seconds * self.sample_rate) as usize;
                     scheduled.push(ScheduledNote {
                         start_sample: start,
                         release_sample: release,
@@ -129,6 +130,38 @@ impl AudioEngine {
 
         // Sort by start time
         scheduled.sort_by_key(|n| n.start_sample);
+
+        // Compute total output length based on EndMode
+        let release_env_seconds = 0.05; // matches the hardcoded envelope release
+        let release_env_samples = (release_env_seconds * self.sample_rate) as usize;
+        // Extra tail for effects (reverb, etc.) — future-proofing
+        let effects_tail_samples = (0.5 * self.sample_rate) as usize;
+
+        let total_samples = match event_list.end_mode {
+            EndMode::Gate => {
+                // End at the latest gate-off (release_sample)
+                let max_gate = scheduled.iter().map(|n| n.release_sample).max().unwrap_or(0);
+                cursor_samples.max(max_gate)
+            }
+            EndMode::Release => {
+                // End after all envelopes finish
+                let max_release = scheduled
+                    .iter()
+                    .map(|n| n.release_sample + release_env_samples)
+                    .max()
+                    .unwrap_or(0);
+                cursor_samples.max(max_release)
+            }
+            EndMode::Tail => {
+                // End after all notes + effect tails finish
+                let max_tail = scheduled
+                    .iter()
+                    .map(|n| n.release_sample + release_env_samples + effects_tail_samples)
+                    .max()
+                    .unwrap_or(0);
+                cursor_samples.max(max_tail)
+            }
+        };
 
         // Render in blocks
         let block_size = 128;
@@ -153,22 +186,17 @@ impl AudioEngine {
                     voice.envelope.decay = 0.1;
                     voice.envelope.sustain = 0.6;
                     voice.envelope.release = 0.05;
+                    voice.release_sample = note.release_sample;
                     voice.note_on(note.frequency, note.velocity);
                     voices.push(voice);
                 }
                 next_note_idx += 1;
             }
 
-            // Check for note releases
-            for (vi, voice) in voices.iter_mut().enumerate() {
-                // Find the corresponding scheduled note for this voice
-                // We use a simple approach: voices are created in order,
-                // so voice index vi corresponds to scheduled note vi
-                if vi < scheduled.len() {
-                    let note = &scheduled[vi];
-                    if note.release_sample >= block_start && note.release_sample < block_end {
-                        voice.note_off();
-                    }
+            // Check for note releases — each voice carries its own release_sample
+            for voice in voices.iter_mut() {
+                if voice.release_sample >= block_start && voice.release_sample < block_end {
+                    voice.note_off();
                 }
             }
 
@@ -189,7 +217,7 @@ impl AudioEngine {
                 output[block_start + i] = s;
             }
 
-            // Remove finished voices (back to front)
+            // Remove finished voices
             voices.retain(|v| !v.is_finished());
 
             block_start = block_end;
@@ -214,7 +242,7 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{Event, EventKind, EventList};
+    use crate::compiler::{EndMode, Event, EventKind, EventList};
 
     fn make_simple_song() -> EventList {
         EventList {
@@ -231,7 +259,9 @@ mod tests {
                     kind: EventKind::Note {
                         pitch: "C4".to_string(),
                         velocity: 100.0,
-                        duration: 1.0,
+                        gate: 1.0,
+                        source_start: 0,
+                        source_end: 0,
                     },
                 },
                 Event {
@@ -239,11 +269,14 @@ mod tests {
                     kind: EventKind::Note {
                         pitch: "E4".to_string(),
                         velocity: 80.0,
-                        duration: 1.0,
+                        gate: 1.0,
+                        source_start: 0,
+                        source_end: 0,
                     },
                 },
             ],
             total_beats: 2.0,
+            end_mode: EndMode::Gate,
         }
     }
 
@@ -278,7 +311,7 @@ mod tests {
         let song = make_simple_song();
         let audio = engine.render(&song);
 
-        // 2 beats at 120 BPM = 1 second = 44100 samples
+        // EndMode::Gate: last note gate ends at beat 2.0 = 1s = 44100 samples
         assert_eq!(audio.len(), 44100);
 
         // Should have non-zero output
@@ -316,6 +349,7 @@ mod tests {
         let song = EventList {
             events: vec![],
             total_beats: 1.0,
+            end_mode: EndMode::Gate,
         };
         let audio = engine.render(&song);
 
@@ -325,17 +359,64 @@ mod tests {
     }
 
     #[test]
-    fn song_length_matches_total_beats() {
+    fn end_mode_gate_vs_tail() {
         let engine = AudioEngine::new(44100.0);
 
-        // Song with a rest: note at 0, then 4 beats total
+        let gate_song = EventList {
+            events: vec![Event {
+                time: 0.0,
+                kind: EventKind::Note {
+                    pitch: "A4".to_string(),
+                    velocity: 100.0,
+                    gate: 1.0,
+                    source_start: 0,
+                    source_end: 0,
+                },
+            }],
+            total_beats: 1.0,
+            end_mode: EndMode::Gate,
+        };
+
+        let tail_song = EventList {
+            events: vec![Event {
+                time: 0.0,
+                kind: EventKind::Note {
+                    pitch: "A4".to_string(),
+                    velocity: 100.0,
+                    gate: 1.0,
+                    source_start: 0,
+                    source_end: 0,
+                },
+            }],
+            total_beats: 1.0,
+            end_mode: EndMode::Tail,
+        };
+
+        let gate_audio = engine.render(&gate_song);
+        let tail_audio = engine.render(&tail_song);
+
+        // Tail mode should produce a longer output (includes release + effects tail)
+        assert!(
+            tail_audio.len() > gate_audio.len(),
+            "Tail ({}) should be longer than Gate ({})",
+            tail_audio.len(),
+            gate_audio.len()
+        );
+    }
+
+    #[test]
+    fn notes_actually_stop_after_gate() {
+        let engine = AudioEngine::new(44100.0);
+        // Short note: gate = 0.1 beats at 120 BPM = 0.05s = 2205 samples
+        // Release envelope = 0.05s = 2205 samples
+        // So after ~4410 samples + some margin, output should be silent
         let song = EventList {
             events: vec![
                 Event {
                     time: 0.0,
                     kind: EventKind::SetProperty {
                         target: "track.beatsPerMinute".to_string(),
-                        value: "60".to_string(),
+                        value: "120".to_string(),
                     },
                 },
                 Event {
@@ -343,15 +424,25 @@ mod tests {
                     kind: EventKind::Note {
                         pitch: "A4".to_string(),
                         velocity: 100.0,
-                        duration: 0.5,
+                        gate: 0.1,
+                        source_start: 0,
+                        source_end: 0,
                     },
                 },
             ],
-            total_beats: 4.0,
+            total_beats: 2.0,
+            end_mode: EndMode::Tail,
         };
 
         let audio = engine.render(&song);
-        // 4 beats at 60 BPM = 4 seconds = 176400 samples
-        assert_eq!(audio.len(), 176400);
+        // Check samples well past the gate+release are silent
+        let check_start = 10000; // ~0.22s in, well past gate (0.05s) + release (0.05s)
+        let tail_max = audio[check_start..]
+            .iter()
+            .fold(0.0_f64, |m, &s| m.max(s.abs()));
+        assert!(
+            tail_max < 0.001,
+            "Audio should be silent after note gate + release, max={tail_max}"
+        );
     }
 }

@@ -2,6 +2,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::*;
 
+// ── Song End Mode ───────────────────────────────────────────
+
+/// Controls how the engine determines the total output length.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum EndMode {
+    /// Hard cut when the last note's gate ends (note-off).
+    Gate,
+    /// Wait for all envelope releases to finish.
+    Release,
+    /// Wait for all notes and effects to finish (default).
+    Tail,
+}
+
+impl Default for EndMode {
+    fn default() -> Self {
+        EndMode::Tail
+    }
+}
+
 // ── Event List (Compiler Output) ────────────────────────────
 
 /// The compiled output: a flat list of timed events.
@@ -11,6 +30,8 @@ pub struct EventList {
     pub events: Vec<Event>,
     /// Total duration of the song in beats (cursor position at end).
     pub total_beats: f64,
+    /// How the engine should determine the end of the audio.
+    pub end_mode: EndMode,
 }
 
 /// A single scheduled event.
@@ -27,8 +48,12 @@ pub enum EventKind {
     Note {
         pitch: String,
         velocity: f64,
-        /// Audible duration in beats.
-        duration: f64,
+        /// Audible gate time in beats (how long the note sounds).
+        gate: f64,
+        /// Source byte offset (for editor highlighting).
+        source_start: usize,
+        /// Source byte end offset.
+        source_end: usize,
     },
     /// Start a sub-track.
     TrackStart {
@@ -45,8 +70,10 @@ pub enum EventKind {
 
 /// Compile context: tracks state during compilation.
 struct CompileCtx {
-    /// Default step duration in beats (e.g., 1/4 = 0.25).
-    default_duration: f64,
+    /// Default note length in beats (e.g., 1/4 = 0.25).
+    default_note_length: f64,
+    /// Song end mode.
+    end_mode: EndMode,
     /// Current cursor position in beats.
     cursor: f64,
     /// Collected events.
@@ -65,7 +92,8 @@ struct TrackDef {
 impl CompileCtx {
     fn new() -> Self {
         CompileCtx {
-            default_duration: 1.0, // default: 1 beat
+            default_note_length: 1.0, // default: 1 beat
+            end_mode: EndMode::Tail,
             cursor: 0.0,
             events: Vec::new(),
             track_defs: Vec::new(),
@@ -81,8 +109,8 @@ impl CompileCtx {
 
     fn resolve_duration(&self, dur: &Option<DurationExpr>) -> f64 {
         match dur {
-            Some(d) => duration_to_beats(d, self.default_duration),
-            None => self.default_duration,
+            Some(d) => duration_to_beats(d, self.default_note_length),
+            None => self.default_note_length,
         }
     }
 }
@@ -137,6 +165,7 @@ pub fn compile(program: &Program) -> Result<EventList, String> {
     Ok(EventList {
         total_beats: ctx.cursor,
         events: ctx.events,
+        end_mode: ctx.end_mode,
     })
 }
 
@@ -162,22 +191,22 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
 
             if let Some(body) = track_body {
                 let saved_cursor = ctx.cursor;
-                let saved_default_dur = ctx.default_duration;
+                let saved_note_len = ctx.default_note_length;
 
                 // Compile the track body inline.
                 compile_track_body(ctx, &body)?;
 
                 // If play_duration is set, cap the track's extent.
                 if let Some(pd) = play_duration {
-                    let max_dur = duration_to_beats(pd, ctx.default_duration);
+                    let max_dur = duration_to_beats(pd, ctx.default_note_length);
                     ctx.cursor = saved_cursor + max_dur;
                 }
 
-                ctx.default_duration = saved_default_dur;
+                ctx.default_note_length = saved_note_len;
 
                 // Apply step (rest after the track call).
                 if let Some(s) = step {
-                    let step_beats = duration_to_beats(s, ctx.default_duration);
+                    let step_beats = duration_to_beats(s, ctx.default_note_length);
                     ctx.cursor = saved_cursor + step_beats;
                 }
             } else {
@@ -188,11 +217,11 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
                     velocity: *velocity,
                     play_duration: play_duration
                         .as_ref()
-                        .map(|d| duration_to_beats(d, ctx.default_duration)),
+                        .map(|d| duration_to_beats(d, ctx.default_note_length)),
                     args: arg_strings,
                 });
                 if let Some(s) = step {
-                    ctx.cursor += duration_to_beats(s, ctx.default_duration);
+                    ctx.cursor += duration_to_beats(s, ctx.default_note_length);
                 }
             }
             Ok(())
@@ -209,12 +238,25 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
                     target: target.clone(),
                     value: expr_to_string(value),
                 });
-            } else if target == "track.duration" {
+            } else if target == "track.noteLength" || target == "track.duration" {
                 if let Expr::DurationLit(d) = value {
-                    ctx.default_duration = duration_to_beats(d, ctx.default_duration);
+                    ctx.default_note_length = duration_to_beats(d, ctx.default_note_length);
                 } else if let Expr::Number(n) = value {
-                    ctx.default_duration = *n;
+                    ctx.default_note_length = *n;
                 }
+            } else if target == "song.endMode" {
+                let mode_str = expr_to_string(value);
+                ctx.end_mode = match mode_str.as_str() {
+                    "gate" => EndMode::Gate,
+                    "release" => EndMode::Release,
+                    "tail" => EndMode::Tail,
+                    _ => {
+                        return Err(format!(
+                            "Unknown song.endMode '{}'. Expected 'gate', 'release', or 'tail'.",
+                            mode_str
+                        ));
+                    }
+                };
             } else {
                 ctx.emit(EventKind::SetProperty {
                     target: target.clone(),
@@ -241,6 +283,8 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             velocity,
             audible_duration,
             step_duration,
+            span_start,
+            span_end,
         } => {
             let vel = velocity.unwrap_or(100.0);
             let audible = ctx.resolve_duration(audible_duration);
@@ -249,7 +293,9 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             ctx.emit(EventKind::Note {
                 pitch: pitch.clone(),
                 velocity: vel,
-                duration: audible,
+                gate: audible,
+                source_start: *span_start,
+                source_end: *span_end,
             });
             ctx.cursor += step;
             Ok(())
@@ -258,23 +304,27 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             notes,
             audible_duration,
             step_duration,
+            span_start,
+            span_end,
         } => {
             let chord_audible = audible_duration
                 .as_ref()
-                .map(|d| duration_to_beats(d, ctx.default_duration));
+                .map(|d| duration_to_beats(d, ctx.default_note_length));
 
             for note in notes {
                 let note_dur = note
                     .audible_duration
                     .as_ref()
-                    .map(|d| duration_to_beats(d, ctx.default_duration))
+                    .map(|d| duration_to_beats(d, ctx.default_note_length))
                     .or(chord_audible)
-                    .unwrap_or(ctx.default_duration);
+                    .unwrap_or(ctx.default_note_length);
 
                 ctx.emit(EventKind::Note {
                     pitch: note.pitch.clone(),
                     velocity: 100.0,
-                    duration: note_dur,
+                    gate: note_dur,
+                    source_start: *span_start,
+                    source_end: *span_end,
                 });
             }
 
@@ -283,15 +333,15 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
             Ok(())
         }
         TrackStatement::Rest(dur) => {
-            ctx.cursor += duration_to_beats(dur, ctx.default_duration);
+            ctx.cursor += duration_to_beats(dur, ctx.default_note_length);
             Ok(())
         }
         TrackStatement::Assignment { target, value } => {
-            if target == "track.duration" {
+            if target == "track.noteLength" || target == "track.duration" {
                 if let Expr::DurationLit(d) = value {
-                    ctx.default_duration = duration_to_beats(d, ctx.default_duration);
+                    ctx.default_note_length = duration_to_beats(d, ctx.default_note_length);
                 } else if let Expr::Number(n) = value {
-                    ctx.default_duration = *n;
+                    ctx.default_note_length = *n;
                 }
             } else {
                 ctx.emit(EventKind::SetProperty {
@@ -331,16 +381,16 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
 
             if let Some(body) = track_body {
                 let saved_cursor = ctx.cursor;
-                let saved_dur = ctx.default_duration;
+                let saved_note_len = ctx.default_note_length;
                 compile_track_body(ctx, &body)?;
 
                 if let Some(pd) = play_duration {
-                    ctx.cursor = saved_cursor + duration_to_beats(pd, ctx.default_duration);
+                    ctx.cursor = saved_cursor + duration_to_beats(pd, ctx.default_note_length);
                 }
-                ctx.default_duration = saved_dur;
+                ctx.default_note_length = saved_note_len;
 
                 if let Some(s) = step {
-                    ctx.cursor = saved_cursor + duration_to_beats(s, ctx.default_duration);
+                    ctx.cursor = saved_cursor + duration_to_beats(s, ctx.default_note_length);
                 }
             } else {
                 let arg_strings: Vec<String> = args.iter().map(expr_to_string).collect();
@@ -349,11 +399,11 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
                     velocity: *velocity,
                     play_duration: play_duration
                         .as_ref()
-                        .map(|d| duration_to_beats(d, ctx.default_duration)),
+                        .map(|d| duration_to_beats(d, ctx.default_note_length)),
                     args: arg_strings,
                 });
                 if let Some(s) = step {
-                    ctx.cursor += duration_to_beats(s, ctx.default_duration);
+                    ctx.cursor += duration_to_beats(s, ctx.default_note_length);
                 }
             }
             Ok(())
@@ -468,18 +518,18 @@ t();
             .events
             .iter()
             .filter_map(|e| match &e.kind {
-                EventKind::Note { pitch, duration, .. } => {
-                    Some((e.time, pitch.as_str(), *duration))
+                EventKind::Note { pitch, gate, .. } => {
+                    Some((e.time, pitch.as_str(), *gate))
                 }
                 _ => None,
             })
             .collect();
 
-        // All three notes fire at time 0, each with audible duration 1 beat.
+        // All three notes fire at time 0, each with audible gate 1 beat.
         assert_eq!(notes.len(), 3);
-        for (time, _, dur) in &notes {
+        for (time, _, g) in &notes {
             assert_eq!(*time, 0.0);
-            assert_eq!(*dur, 1.0);
+            assert_eq!(*g, 1.0);
         }
         // Step duration /2 = 0.5 beats.
         assert_eq!(events.total_beats, 0.5);

@@ -171,7 +171,14 @@ export const completionItems: monaco.languages.CompletionItem[] = [
         kind: 9,
         insertText: 'track.duration = ${1:1/4};',
         insertTextRules: 4,
-        detail: 'Set the default step duration',
+        detail: 'Set the default step duration (deprecated, use track.noteLength)',
+    },
+    {
+        label: 'track.noteLength',
+        kind: 9,
+        insertText: 'track.noteLength = ${1:1/4};',
+        insertTextRules: 4,
+        detail: 'Set the default note length',
     },
     {
         label: 'track.instrument',
@@ -186,5 +193,13 @@ export const completionItems: monaco.languages.CompletionItem[] = [
         insertText: 'track.effects = [${0}];',
         insertTextRules: 4,
         detail: 'Set the track effects chain',
+    },
+    {
+        label: 'song.endMode',
+        kind: 9,
+        insertText: "song.endMode = '${1|gate,release,tail|}';",
+        insertTextRules: 4,
+        detail: "Set song end mode: 'gate', 'release', or 'tail'",
+        documentation: "Controls output length. 'gate' = hard cut at last note-off, 'release' = wait for envelope release, 'tail' = wait for effects tail (default).",
     },
 ] as any;

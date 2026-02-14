@@ -49,7 +49,7 @@ fn encode_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{Event, EventKind, EventList};
+    use crate::compiler::{EndMode, Event, EventKind, EventList};
 
     #[test]
     fn wav_header_valid() {
@@ -59,10 +59,13 @@ mod tests {
                 kind: EventKind::Note {
                     pitch: "C4".to_string(),
                     velocity: 100.0,
-                    duration: 1.0,
+                    gate: 1.0,
+                    source_start: 0,
+                    source_end: 0,
                 },
             }],
             total_beats: 1.0,
+            end_mode: EndMode::Gate,
         };
 
         let wav = render_wav(&song, 44100);
@@ -87,6 +90,7 @@ mod tests {
         let song = EventList {
             events: vec![],
             total_beats: 1.0,
+            end_mode: EndMode::Gate,
         };
 
         let wav = render_wav(&song, 44100);
