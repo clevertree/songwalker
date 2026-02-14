@@ -1,22 +1,42 @@
-# SongWalker
+# SongWalker (v2.0 Architecture in Progress)
+
+> **⚠️ Note:** This project is currently undergoing a complete rewrite to a Rust-based Core + Web Editor Monorepo architecture. The legacy Next.js implementation has been archived.
 
 Write songs & learn to program!
 
-## Demo
+## New Structure
+
+- **`songwalker_core/`**: Rust library for parsing, compiling the `.sw` language, and DSP.
+- **`songwalker_web/`**: Next-gen Web Editor (WASM driven).
+- **`archive/`**: Legacy codebase.
+
+## Demo (Legacy)
 
 https://song-walker.vercel.app/
 
 ## Concept
 
-SongWalker is a js library that compiles SongWalker code into javascript code to be used
-to render music and other media. A `Music Programming Language` is capable of writing songs of
-*unlimited* potential, unconstrained by the technical requirements of
-modern [DAWs](https://en.wikipedia.org/wiki/Digital_audio_workstation).
+SongWalker is a music programming language that compiles into an internal event list for high-precision scheduling. It allows writing songs of *unlimited* potential, unconstrained by standard DAW limitations.
 
-## SongWalker Code Examples
+## SongWalker Code Examples (Language Preview)
 
-Here is a breakdown of source code for a renderable song which can played back or compiled directly
-into a game or other piece of software.
+Here is a preview of the new syntax (v2):
+
+### Playing Tracks
+
+```javascript
+// Define a riff
+track riff(inst) {
+    C3 /2
+    Eb3 .  // dot shorthand
+}
+
+// Play it
+riff(lead)
+riff(bass)*90 // with 90 velocity
+``` 
+
+### Legacy Documentation below...
 
 ### Loading Instruments
 
