@@ -1,149 +1,144 @@
-# SongWalker (v2.0 Architecture in Progress)
+# SongWalker
 
-> **⚠️ Note:** This project is currently undergoing a complete rewrite to a Rust-based Core + Web Editor Monorepo architecture. The legacy Next.js implementation has been archived.
+> A music programming language — write songs as code.
 
-Write songs & learn to program!
+**[songwalker.net](https://songwalker.net)**
 
-## New Structure
+## What is SongWalker?
 
-- **`songwalker_core/`**: Rust library for parsing, compiling the `.sw` language, and DSP.
-- **`songwalker_web/`**: Next-gen Web Editor (WASM driven).
-- **`archive/`**: Legacy codebase.
+SongWalker is a minimalist music programming language with a built-in synthesizer. Write melodies using note names, durations, tracks, and loops — then play them instantly in your browser or export to WAV.
 
-## Demo (Legacy)
+The compiler and audio engine are written in Rust, compiled to WebAssembly for the browser and available as a native CLI for offline rendering.
 
-https://song-walker.vercel.app/
-
-## Concept
-
-SongWalker is a music programming language that compiles into an internal event list for high-precision scheduling. It allows writing songs of *unlimited* potential, unconstrained by standard DAW limitations.
-
-## SongWalker Code Examples (Language Preview)
-
-Here is a preview of the new syntax (v2):
-
-### Playing Tracks
-
-```javascript
-// Define a riff
-track riff(inst) {
-    C3 /2
-    Eb3 .  // dot shorthand
-}
-
-// Play it
-riff(lead)
-riff(bass)*90 // with 90 velocity
-``` 
-
-### Legacy Documentation below...
-
-### Loading Instruments
-
-This code loads a guitar sample bank as a `lead`, an oscillator as `osc`,
-a percussion set `perc` and a reverb effect `reverb`.
-
-```javascript
-const lead = await loadPreset(/FluidR3.*\/.*Guitar/i) // Load first matching preset
-const osc = await loadPreset("Oscillator", {'type': 'square', mixer: 0.4})
-const perc = await loadPreset("FluidR3_GM/Room 1")
-const reverb = await loadPreset("Reverb")
-```
-
-### Setting track / global variables
-
-SongWalker auto-generates the variable `track` to represent the current playing track
-
-```javascript
-track.beatsPerMinute = 160;
-```
-
-### Playing Tracks
-
-This code plays both tracks `track1` (with an guitar sample instrument) and `beat1`
-simultaneously, then **waits 8 beats**, then plays both tracks again, but this time `track1` uses an oscillator
-instrument.
+## Quick Example
 
 ```
-track1(lead); beat1^96@4; 8
-track1(osc); beat1@7; 8
-```
+track.beatsPerMinute = 140;
 
-### Defining Tracks
+melody();
 
-This code defines a track function. Track functions differ from normal javascript functions
-because they generate a local `track` variable which represents the current track state.
-By changing this track state, we can switch up or reconfigure instruments and effects.
+track melody() {
+    track.duration = 1/4;
 
-```
-track track1(instrument) {
-    track.effects = [reverb];           // This track will use the reverb effect only
-    track.instrument = instrument;      // Instrument is set to the parameter variable
-    track.duration=1/4                  // Note duration will be 1/4th a beat
-    C3 /2                               // Play C3, wait 1/2 beat
-    C2@/2 /2                            // override note duration with 1/2 beat
-    G2 /2                               // Play G2, wait 1/2 beat
-    Eb2 /2                              // Play Eb2, wait 1/2 beat
-    Eb3 /2                              // Play Eb3, wait 1/2 beat
-    F3 /2                               // Play F3, wait 1/2 beat
-    Eb3 /2                              // Play Eb3, wait 1/2 beat
-    D3 /2                               // Play D3, wait 1/2 beat
-    C3 /2                               // Play C3, wait 1/2 beat
-    C2 /2                               // Play C2, wait 1/2 beat
-    G2 /2                               // Play G2, wait 1/2 beat
-    Eb2 /2                              // Play Eb2, wait 1/2 beat
-    D3 /2                               // Play D3, wait 1/2 beat
-    C2 /2                               // Play C2, wait 1/2 beat
-    Bb2 /2                              // Play Bb2, wait 1/2 beat
+    C4 /4
+    E4 /4
+    G4 /4
+    C5 /2
+
+    B4 /4
+    G4 /4
+    E4 /4
+    C4 /2
+
+    4
 }
 ```
 
-Define a percussion track with no parameters
+## Features
+
+- **Minimalist notation** — `C4 /4` plays middle C for a quarter beat
+- **Tracks** — reusable musical phrases with `track name() { ... }`
+- **Control flow** — `for` loops, variables, nested track calls
+- **Modifiers** — velocity (`*90`), audible duration (`@1/4`), rests (standalone numbers)
+- **Chords** — simultaneous notes in one step
+- **Pure Rust DSP** — deterministic audio across all platforms (anti-aliased PolyBLEP oscillators, ADSR envelopes, biquad filters)
+- **WAV export** — from the browser or the CLI
+- **Monaco editor** — syntax highlighting, autocomplete, keyboard shortcuts
+
+## Project Structure
 
 ```
-track beat1() {
-    track.instrument=perc               // Set track instrument to percussion kit
-    track.velocityDivisor=10            // Set velocity devisor to 10
-    chh^3           /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh^3           /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     as      /2                  // Play CloseHiHat & Acoustic Snare, wait 1/2
-    chh^3@/8        /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     abd     /2                  // Play CloseHiHat & Base Drum, wait 1/2
-    chh^3   abd^6   /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     as      /2                  // Play CloseHiHat & Acoustic Snare, wait 1/2
-    chh^3           /4                  // Play CloseHiHat at 3/10 velocity, wait 1/4
-    chh^3           /4                  // Play CloseHiHat at 3/10 velocity, wait 1/4
-    chh     abd     /2                  // Play CloseHiHat & Base Drum, wait 1/2
-    chh^3           /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     as      /2                  // Play CloseHiHat & Acoustic Snare, wait 1/2
-    chh^3           /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     abd     /2                  // Play CloseHiHat & Base Drum, wait 1/2
-    chh^3   abd^6   /2                  // Play CloseHiHat at 3/10 velocity, wait 1/2
-    chh     as      /2                  // Play CloseHiHat & Acoustic Snare, wait 1/2
-    ohh^3@/3        /2                  // Play OpenHiHat at 3/10 velocity, wait 1/2
+songwalker_core/    Rust library — parser, compiler, DSP engine
+songwalker_cli/     CLI binary — offline rendering to WAV
+songwalker_web/     Web editor — Vite + Monaco + WASM
+docs/               Language docs and plans
+archive/            Legacy codebase
+```
+
+## Getting Started
+
+### Web Editor
+
+Visit **[songwalker.net](https://songwalker.net)** — no install needed.
+
+### CLI
+
+```bash
+# Render a song to WAV
+cargo run --manifest-path songwalker_cli/Cargo.toml -- song.sw output.wav
+
+# Check syntax
+cargo run --manifest-path songwalker_cli/Cargo.toml -- --check song.sw
+
+# Print AST
+cargo run --manifest-path songwalker_cli/Cargo.toml -- --ast song.sw
+```
+
+### Development
+
+```bash
+# Run Rust tests (60 tests)
+cd songwalker_core && cargo test
+
+# Build WASM
+cd songwalker_core && wasm-pack build --target web --out-dir ../songwalker_web/src/wasm
+
+# Dev server
+cd songwalker_web && npm run dev
+
+# Production build
+cd songwalker_web && npm run build
+```
+
+## Language Reference
+
+### Notes
+```
+C4          Play C4 with default duration
+C4 /4       Play C4, step 1/4 beat
+Eb3 /2      Play E-flat 3, step 1/2 beat
+F#5 2       Play F-sharp 5, step 2 beats
+```
+
+### Modifiers
+```
+C4*90 /4    Velocity 90 (out of 127)
+C4@1/8 /4   Audible duration 1/8 beat, step 1/4 beat
+```
+
+### Rests
+```
+4           Rest for 4 beats
+1/2         Rest for half a beat
+```
+
+### Tracks
+```
+track name(params) {
+    // notes, rests, loops, track calls
 }
+name();     // call the track
 ```
 
-## Render a Song File
-
-```javascript
-import {compileSongToCallback, renderSong} from "@songwalker";
-
-const song = compileSongToCallback(SONG_SOURCE);
-await renderSong(song);
+### Variables
+```
+track.beatsPerMinute = 140;
+track.duration = 1/4;
+const x = 42;
 ```
 
-## Preset Library
+## Architecture
 
-SongWalker Preset Library comes with all presets from [WebAudioFont](https://github.com/clevertree/webaudiofontdata/)
+The entire audio pipeline runs in Rust:
 
-See [index](https://surikov.github.io/webaudiofontdata/sound/) of wavetables
+1. **Lexer** — hand-rolled tokenizer with note/modifier context
+2. **Parser** — recursive descent, produces typed AST
+3. **Compiler** — AST → flat EventList with resolved timings
+4. **DSP Engine** — PolyBLEP oscillators → ADSR envelopes → biquad filters → soft-clip mixer
+5. **Renderer** — EventList → PCM samples → WAV
 
-- [GeneralUserGS.sf2 license](http://www.schristiancollins.com/generaluser.php)
-- [FluidR3.sf2 license](https://github.com/musescore/MuseScore/blob/master/share/sound/FluidR3Mono_License.md)
+The same Rust code powers both the WASM web player and the native CLI renderer, guaranteeing identical output.
 
-Main project - [WebAudioFont](https://surikov.github.io/webaudiofont/)
+## License
 
-## Looking for help
-
-If you're interested in contributing to this project please contact me at [ari@asu.edu](mailto:ari@asu.edu)
+MIT

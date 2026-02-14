@@ -1,251 +1,174 @@
 /**
- * SongWalker Audio Scheduler
+ * SongWalker Audio Player
  *
- * Takes a compiled EventList from the Rust core and schedules
- * note events against a WebAudio AudioContext with lookahead buffering.
+ * Uses the Rust DSP engine (via WASM) to pre-render audio,
+ * then plays it through a standard AudioBufferSourceNode.
+ * This ensures deterministic, cross-platform audio output.
  */
 
-export interface NoteEvent {
-  pitch: string;
-  velocity: number;
-  duration: number;
-}
+import { render_song_samples, render_song_wav } from './wasm/songwalker_core.js';
 
-export interface TrackStartEvent {
-  track_name: string;
-  velocity: number | null;
-  play_duration: number | null;
-  args: string[];
-}
-
-export interface SetPropertyEvent {
-  target: string;
-  value: string;
-}
-
-export type EventKind =
-  | { Note: NoteEvent }
-  | { TrackStart: TrackStartEvent }
-  | { SetProperty: SetPropertyEvent };
-
-export interface ScheduledEvent {
-  time: number; // in beats
-  kind: EventKind;
-}
-
+// Re-export types for backward compatibility
 export interface EventList {
-  events: ScheduledEvent[];
-  total_beats: number;
+    events: any[];
+    total_beats: number;
 }
 
-// ── Note frequency map ─────────────────────────────────────
-
-const NOTE_NAMES: Record<string, number> = {
-  C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
-};
-
-/**
- * Convert a note name like "C3", "Eb4", "F#5" to a frequency in Hz.
- */
-export function noteToFrequency(note: string): number | null {
-  const match = note.match(/^([A-G])(b|#)?(\d+)$/);
-  if (!match) return null;
-
-  const [, name, accidental, octaveStr] = match;
-  const octave = parseInt(octaveStr, 10);
-  let semitone = NOTE_NAMES[name];
-  if (semitone === undefined) return null;
-
-  if (accidental === '#') semitone += 1;
-  else if (accidental === 'b') semitone -= 1;
-
-  // MIDI note number: C4 = 60
-  const midi = (octave + 1) * 12 + semitone;
-  // A4 (MIDI 69) = 440 Hz
-  return 440 * Math.pow(2, (midi - 69) / 12);
-}
-
-// ── Scheduler ──────────────────────────────────────────────
+// ── Player State ───────────────────────────────────────────
 
 export interface PlayerState {
-  playing: boolean;
-  currentBeat: number;
-  totalBeats: number;
-  bpm: number;
+    playing: boolean;
+    currentBeat: number;
+    totalBeats: number;
+    bpm: number;
 }
 
 export type OnStateChange = (state: PlayerState) => void;
 
+/**
+ * Pre-renders audio via Rust WASM DSP engine, then plays it.
+ */
 export class SongPlayer {
-  private ctx: AudioContext | null = null;
-  private events: ScheduledEvent[] = [];
-  private totalBeats = 0;
-  private bpm = 120;
-  private startTime = 0; // AudioContext time when playback started
-  private nextEventIndex = 0;
-  private schedulerTimer: number | null = null;
-  private stateTimer: number | null = null;
-  private playing = false;
-  private onStateChange: OnStateChange | null = null;
+    private ctx: AudioContext | null = null;
+    private sourceNode: AudioBufferSourceNode | null = null;
+    private totalBeats = 0;
+    private bpm = 120;
+    private startTime = 0;
+    private stateTimer: number | null = null;
+    private playing = false;
+    private onStateChange: OnStateChange | null = null;
+    private currentSource: string = '';
 
-  // Lookahead scheduling parameters
-  private readonly LOOKAHEAD_SEC = 0.15; // schedule events this far ahead
-  private readonly SCHEDULE_INTERVAL_MS = 50; // how often to call scheduler
+    private readonly SAMPLE_RATE = 44100;
 
-  constructor() {}
+    constructor() { }
 
-  /**
-   * Load a compiled event list for playback.
-   */
-  load(eventList: EventList): void {
-    this.stop();
-    this.events = eventList.events;
-    this.totalBeats = eventList.total_beats;
-    this.nextEventIndex = 0;
+    /**
+     * Register a callback for state changes.
+     */
+    onState(cb: OnStateChange): void {
+        this.onStateChange = cb;
+    }
 
-    // Extract BPM from SetProperty events
-    for (const evt of this.events) {
-      if ('SetProperty' in evt.kind) {
-        const prop = (evt.kind as { SetProperty: SetPropertyEvent }).SetProperty;
-        if (prop.target === 'track.beatsPerMinute') {
-          this.bpm = parseFloat(prop.value) || 120;
+    /**
+     * Compile, render, and play the song from source code.
+     */
+    async playSource(source: string): Promise<void> {
+        this.stop();
+        this.currentSource = source;
+
+        if (!this.ctx) {
+            this.ctx = new AudioContext({ sampleRate: this.SAMPLE_RATE });
         }
-      }
+        if (this.ctx.state === 'suspended') {
+            await this.ctx.resume();
+        }
+
+        // Render audio via Rust DSP engine
+        const samples = render_song_samples(source, this.SAMPLE_RATE);
+        if (samples.length === 0) {
+            this.emitState();
+            return;
+        }
+
+        // Extract BPM and total beats from a compile pass
+        // (render_song_samples doesn't return metadata, so we parse it)
+        this.extractMetadata(source);
+
+        // Create an AudioBuffer from the rendered samples
+        const buffer = this.ctx.createBuffer(1, samples.length, this.SAMPLE_RATE);
+        buffer.copyToChannel(samples, 0);
+
+        // Create and start source node
+        this.sourceNode = this.ctx.createBufferSource();
+        this.sourceNode.buffer = buffer;
+        this.sourceNode.connect(this.ctx.destination);
+
+        this.playing = true;
+        this.startTime = this.ctx.currentTime;
+        this.sourceNode.start(0);
+
+        this.sourceNode.onended = () => {
+            this.stop();
+        };
+
+        this.stateTimer = window.setInterval(() => this.emitState(), 50);
+        this.emitState();
     }
 
-    this.emitState();
-  }
-
-  /**
-   * Register a callback for state changes (play/pause, position, etc.)
-   */
-  onState(cb: OnStateChange): void {
-    this.onStateChange = cb;
-  }
-
-  /**
-   * Start playback.
-   */
-  async play(): Promise<void> {
-    if (this.playing) return;
-
-    if (!this.ctx) {
-      this.ctx = new AudioContext();
-    }
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    /**
+     * Stop playback.
+     */
+    stop(): void {
+        if (this.sourceNode) {
+            try {
+                this.sourceNode.stop();
+            } catch {
+                // already stopped
+            }
+            this.sourceNode.disconnect();
+            this.sourceNode = null;
+        }
+        this.playing = false;
+        if (this.stateTimer !== null) {
+            clearInterval(this.stateTimer);
+            this.stateTimer = null;
+        }
+        this.emitState();
     }
 
-    this.playing = true;
-    this.nextEventIndex = 0;
-    this.startTime = this.ctx.currentTime;
-
-    this.schedulerLoop();
-    this.stateTimer = window.setInterval(() => this.emitState(), 50);
-    this.emitState();
-  }
-
-  /**
-   * Stop playback.
-   */
-  stop(): void {
-    this.playing = false;
-    if (this.schedulerTimer !== null) {
-      clearTimeout(this.schedulerTimer);
-      this.schedulerTimer = null;
-    }
-    if (this.stateTimer !== null) {
-      clearInterval(this.stateTimer);
-      this.stateTimer = null;
-    }
-    this.nextEventIndex = 0;
-    this.emitState();
-  }
-
-  /**
-   * Get current playback position in beats.
-   */
-  getCurrentBeat(): number {
-    if (!this.playing || !this.ctx) return 0;
-    const elapsed = this.ctx.currentTime - this.startTime;
-    return (elapsed * this.bpm) / 60;
-  }
-
-  // ── Scheduler Loop ──────────────────────────────────────
-
-  private schedulerLoop(): void {
-    if (!this.playing || !this.ctx) return;
-
-    const currentTime = this.ctx.currentTime;
-    const horizon = currentTime + this.LOOKAHEAD_SEC;
-
-    while (this.nextEventIndex < this.events.length) {
-      const evt = this.events[this.nextEventIndex];
-      const eventTimeSec = this.startTime + (evt.time * 60) / this.bpm;
-
-      if (eventTimeSec > horizon) break;
-
-      this.scheduleEvent(evt, eventTimeSec);
-      this.nextEventIndex++;
+    /**
+     * Export the current song as a WAV file download.
+     */
+    exportWav(source: string, filename = 'song.wav'): void {
+        const wavBytes = render_song_wav(source, this.SAMPLE_RATE);
+        const blob = new Blob([wavBytes], { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
-    // Check if song is done
-    const songEndSec = this.startTime + (this.totalBeats * 60) / this.bpm;
-    if (currentTime >= songEndSec) {
-      this.stop();
-      return;
+    /**
+     * Get current playback position in beats.
+     */
+    getCurrentBeat(): number {
+        if (!this.playing || !this.ctx) return 0;
+        const elapsed = this.ctx.currentTime - this.startTime;
+        return (elapsed * this.bpm) / 60;
     }
 
-    this.schedulerTimer = window.setTimeout(
-      () => this.schedulerLoop(),
-      this.SCHEDULE_INTERVAL_MS,
-    );
-  }
-
-  private scheduleEvent(evt: ScheduledEvent, whenSec: number): void {
-    if (!this.ctx) return;
-
-    if ('Note' in evt.kind) {
-      const note = (evt.kind as { Note: NoteEvent }).Note;
-      this.scheduleNote(note, whenSec);
+    get isPlaying(): boolean {
+        return this.playing;
     }
-    // TrackStart and SetProperty are handled at load time for now
-  }
 
-  private scheduleNote(note: NoteEvent, whenSec: number): void {
-    if (!this.ctx) return;
+    private extractMetadata(source: string): void {
+        // Extract BPM from source text (simple regex)
+        const bpmMatch = source.match(/beatsPerMinute\s*=\s*(\d+)/);
+        this.bpm = bpmMatch ? parseInt(bpmMatch[1], 10) : 120;
 
-    const freq = noteToFrequency(note.pitch);
-    if (freq === null) return; // skip unrecognized pitches (e.g., drum names)
-
-    const durationSec = (note.duration * 60) / this.bpm;
-    const velocity = Math.min(note.velocity / 127, 1.0);
-
-    // Simple oscillator-based playback (Phase 2 placeholder)
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq, whenSec);
-
-    gain.gain.setValueAtTime(velocity * 0.3, whenSec);
-    gain.gain.exponentialRampToValueAtTime(0.001, whenSec + durationSec);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(whenSec);
-    osc.stop(whenSec + durationSec + 0.05);
-  }
-
-  private emitState(): void {
-    if (this.onStateChange) {
-      this.onStateChange({
-        playing: this.playing,
-        currentBeat: this.getCurrentBeat(),
-        totalBeats: this.totalBeats,
-        bpm: this.bpm,
-      });
+        // Estimate total beats from the rendered audio length
+        // This is a rough approximation; the compiler has the exact value
+        try {
+            // We can use compile_song to get metadata, but to avoid importing 
+            // it here, we estimate from the rendered samples
+            const durationSec = this.sourceNode?.buffer?.duration ?? 0;
+            this.totalBeats = (durationSec * this.bpm) / 60;
+        } catch {
+            this.totalBeats = 0;
+        }
     }
-  }
+
+    private emitState(): void {
+        if (this.onStateChange) {
+            this.onStateChange({
+                playing: this.playing,
+                currentBeat: this.getCurrentBeat(),
+                totalBeats: this.totalBeats,
+                bpm: this.bpm,
+            });
+        }
+    }
 }

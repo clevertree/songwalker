@@ -1,168 +1,358 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SongWalker — Music Programming Language</title>
-  <style>
-    :root {
-      --bg: #1e1e2e;
-      --surface: #181825;
-      --text: #cdd6f4;
-      --accent: #89b4fa;
-      --accent-hover: #74c7ec;
-      --error: #f38ba8;
-      --border: #313244;
-      --green: #a6e3a1;
-      --red: #f38ba8;
-      --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SongWalker — Music Programming Language</title>
+    <meta name="description"
+        content="SongWalker is a music programming language. Write songs using minimalist notation with JavaScript-style control flow. Runs entirely in your browser.">
+    <meta name="theme-color" content="#1e1e2e">
+    <meta property="og:title" content="SongWalker — Music Programming Language">
+    <meta property="og:description"
+        content="Write music as code. A minimalist notation language with a built-in synthesizer, running entirely in your browser via Rust + WASM.">
+    <meta property="og:url" content="https://songwalker.net">
+    <meta property="og:type" content="website">
+    <link rel="canonical" href="https://songwalker.net">
+    <style>
+        :root {
+            --bg: #1e1e2e;
+            --surface: #181825;
+            --overlay: #11111b;
+            --text: #cdd6f4;
+            --subtext: #a6adc8;
+            --accent: #89b4fa;
+            --accent-hover: #74c7ec;
+            --error: #f38ba8;
+            --border: #313244;
+            --green: #a6e3a1;
+            --red: #f38ba8;
+            --mauve: #cba6f7;
+            --peach: #fab387;
+            --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+        }
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
 
-    header {
-      padding: 1rem 2rem;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
+        header {
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
 
-    header h1 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: var(--accent);
-    }
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--accent);
+            letter-spacing: -0.02em;
+        }
 
-    header .subtitle {
-      font-size: 0.85rem;
-      opacity: 0.6;
-    }
+        header .subtitle {
+            font-size: 0.85rem;
+            color: var(--subtext);
+        }
 
-    .toolbar {
-      padding: 0.5rem 2rem;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      gap: 0.5rem;
-      align-items: center;
-      flex-wrap: wrap;
-    }
+        header .version {
+            font-size: 0.7rem;
+            color: var(--subtext);
+            opacity: 0.5;
+            font-family: var(--font-mono);
+        }
 
-    button {
-      background: var(--surface);
-      color: var(--text);
-      border: 1px solid var(--border);
-      padding: 0.4rem 0.8rem;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 0.85rem;
-      transition: background 0.15s;
-    }
-    button:hover { background: var(--border); }
-    button.primary { background: var(--accent); color: var(--bg); font-weight: 600; }
-    button.primary:hover { background: var(--accent-hover); }
-    button.danger { border-color: var(--red); color: var(--red); }
-    button.danger:hover { background: var(--red); color: var(--bg); }
+        .toolbar {
+            padding: 0.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
 
-    .spacer { flex: 1; }
+        button {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.15s ease;
+        }
 
-    #status {
-      font-size: 0.8rem;
-      opacity: 0.7;
-      font-family: var(--font-mono);
-    }
+        button:hover {
+            background: var(--border);
+        }
 
-    .editor-container {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      padding: 0;
-      min-height: 0;
-      overflow: hidden;
-    }
+        button:active {
+            transform: scale(0.97);
+        }
 
-    #editor-container {
-      flex: 1;
-      width: 100%;
-      min-height: 0;
-    }
+        button.primary {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+            border-color: var(--accent);
+        }
 
-    #error {
-      padding: 0 2rem;
-      color: var(--error);
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      min-height: 1.5rem;
-      line-height: 1.5rem;
-    }
+        button.primary:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+        }
 
-    /* Fullscreen mode */
-    html.fullscreen header,
-    html.fullscreen .about {
-      display: none;
-    }
-    html.fullscreen .toolbar {
-      padding: 0.5rem 1rem;
-    }
-    html.fullscreen #editor-container {
-      /* Monaco handles its own padding */
-    }
+        button.danger {
+            border-color: var(--red);
+            color: var(--red);
+        }
 
-    .about {
-      padding: 2rem;
-      border-top: 1px solid var(--border);
-      max-width: 700px;
-    }
-    .about h2 { font-size: 1.1rem; margin-bottom: 0.5rem; color: var(--accent); }
-    .about p { font-size: 0.9rem; line-height: 1.6; opacity: 0.8; margin-bottom: 0.5rem; }
-    .about code { font-family: var(--font-mono); background: var(--surface); padding: 0.1em 0.3em; border-radius: 3px; }
-    .about a { color: var(--accent); }
-  </style>
+        button.danger:hover {
+            background: var(--red);
+            color: var(--bg);
+        }
+
+        .separator {
+            width: 1px;
+            height: 1.2rem;
+            background: var(--border);
+            margin: 0 0.25rem;
+        }
+
+        .spacer {
+            flex: 1;
+        }
+
+        #status {
+            font-size: 0.8rem;
+            color: var(--subtext);
+            font-family: var(--font-mono);
+        }
+
+        .editor-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        #editor-container {
+            flex: 1;
+            width: 100%;
+            min-height: 0;
+        }
+
+        #error {
+            padding: 0.5rem 2rem;
+            color: var(--error);
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            min-height: 0;
+            line-height: 1.4;
+            background: var(--overlay);
+            border-top: 1px solid var(--border);
+        }
+
+        #error:empty {
+            display: none;
+        }
+
+        /* Fullscreen mode */
+        html.fullscreen header,
+        html.fullscreen .about {
+            display: none;
+        }
+
+        html.fullscreen .toolbar {
+            padding: 0.5rem 1rem;
+        }
+
+        .about {
+            padding: 2rem;
+            border-top: 1px solid var(--border);
+            max-width: 800px;
+        }
+
+        .about h2 {
+            font-size: 1.1rem;
+            margin-bottom: 0.75rem;
+            color: var(--accent);
+        }
+
+        .about p {
+            font-size: 0.9rem;
+            line-height: 1.7;
+            color: var(--subtext);
+            margin-bottom: 0.75rem;
+        }
+
+        .about code {
+            font-family: var(--font-mono);
+            background: var(--surface);
+            padding: 0.15em 0.4em;
+            border-radius: 3px;
+            font-size: 0.85em;
+            color: var(--peach);
+        }
+
+        .about a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .about a:hover {
+            text-decoration: underline;
+        }
+
+        .about .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin: 1.25rem 0;
+        }
+
+        .about .feature {
+            background: var(--surface);
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .about .feature h3 {
+            font-size: 0.9rem;
+            color: var(--mauve);
+            margin-bottom: 0.4rem;
+        }
+
+        .about .feature p {
+            font-size: 0.8rem;
+            margin-bottom: 0;
+        }
+
+        .footer {
+            padding: 1rem 2rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--subtext);
+            opacity: 0.5;
+            text-align: center;
+        }
+
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            header {
+                padding: 0.75rem 1rem;
+            }
+
+            .toolbar {
+                padding: 0.5rem 1rem;
+                gap: 0.35rem;
+            }
+
+            .about {
+                padding: 1.25rem;
+            }
+
+            .separator {
+                display: none;
+            }
+        }
+    </style>
 </head>
+
 <body>
-  <header>
-    <h1>SongWalker</h1>
-    <span class="subtitle">Music Programming Language</span>
-  </header>
+    <header>
+        <h1>SongWalker</h1>
+        <span class="subtitle">Music Programming Language</span>
+        <span class="spacer"></span>
+        <span class="version">v0.1.0</span>
+    </header>
 
-  <div class="toolbar">
-    <button id="play-btn" class="primary">&#9654; Play</button>
-    <button id="stop-btn" class="danger">&#9632; Stop</button>
-    <span class="spacer"></span>
-    <span id="status">Ready</span>
-    <span class="spacer"></span>
-    <button id="open-btn">Open</button>
-    <button id="save-btn">Save</button>
-    <button id="fullscreen-btn">&#x26F6; Fullscreen</button>
-  </div>
+    <div class="toolbar">
+        <button id="play-btn" class="primary" title="Play (Ctrl+Enter)">&#9654; Play</button>
+        <button id="stop-btn" class="danger" title="Stop">&#9632; Stop</button>
+        <span class="separator"></span>
+        <span id="status">Ready</span>
+        <span class="spacer"></span>
+        <button id="open-btn" title="Open .sw file">Open</button>
+        <button id="save-btn" title="Save .sw file">Save</button>
+        <button id="export-btn" title="Export as WAV audio">&#x1F4E5; WAV</button>
+        <span class="separator"></span>
+        <button id="fullscreen-btn" title="Toggle fullscreen editor">&#x26F6; Fullscreen</button>
+    </div>
 
-  <div id="error"></div>
+    <div id="error"></div>
 
-  <div class="editor-container">
-    <div id="editor-container"></div>
-  </div>
+    <div class="editor-wrapper">
+        <div id="editor-container"></div>
+    </div>
 
-  <div class="about">
-    <h2>About</h2>
-    <p>
-      SongWalker is a music programming language. Write songs using a minimalist notation
-      with JavaScript control flow. Press <code>Ctrl+Enter</code> to play.
-    </p>
-    <p>
-      Your code is saved automatically to your browser. Use <strong>Open</strong>/<strong>Save</strong>
-      to work with <code>.sw</code> files on disk.
-    </p>
-  </div>
+    <div class="about">
+        <h2>About SongWalker</h2>
+        <p>
+            SongWalker is a music programming language designed for writing songs with minimalist notation
+            and JavaScript-style control flow. It compiles and synthesizes audio entirely in your browser
+            using a Rust-powered engine compiled to WebAssembly.
+        </p>
 
-  <script type="module" src="./src/main.ts"></script>
+        <div class="features">
+            <div class="feature">
+                <h3>Minimalist Notation</h3>
+                <p>Write notes like <code>C4 /4</code>, chords, rests, and durations with a clean, readable syntax.</p>
+            </div>
+            <div class="feature">
+                <h3>Tracks &amp; Loops</h3>
+                <p>Define reusable tracks with <code>track</code> blocks. Use <code>for</code> loops for repetition.</p>
+            </div>
+            <div class="feature">
+                <h3>Rust + WASM</h3>
+                <p>The compiler and synthesizer run in Rust via WebAssembly for deterministic, cross-platform audio.</p>
+            </div>
+            <div class="feature">
+                <h3>Offline Export</h3>
+                <p>Export your songs as WAV files. Same engine, same sound — in the browser or from the command line.
+                </p>
+            </div>
+        </div>
+
+        <p>
+            Press <code>Ctrl+Enter</code> to play. Your code is auto-saved to your browser.
+            Use <strong>Open</strong>/<strong>Save</strong> for <code>.sw</code> files on disk,
+            or <strong>WAV</strong> to export audio.
+        </p>
+        <p>
+            <a href="https://github.com/user/song-walker" target="_blank" rel="noopener">GitHub</a>
+        </p>
+    </div>
+
+    <div class="footer">
+        <a href="https://songwalker.net">songwalker.net</a> &middot;
+        Built with Rust, WebAssembly &amp; Monaco Editor
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
 </body>
+
 </html>
