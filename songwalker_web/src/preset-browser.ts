@@ -1,0 +1,312 @@
+/**
+ * Preset Browser UI — searchable panel for browsing the preset library.
+ *
+ * Creates a collapsible sidebar panel with:
+ * - Search input with fuzzy matching
+ * - Category/tag filter chips
+ * - Scrollable preset list with metadata
+ * - Click-to-insert into editor
+ */
+
+import type { CatalogEntry, PresetCategory } from './preset-types.js';
+import { PresetLoader } from './preset-loader.js';
+
+// ── Category Colours ─────────────────────────────────────
+
+const CATEGORY_COLOURS: Record<PresetCategory, string> = {
+    synth: '#89b4fa',
+    sampler: '#a6e3a1',
+    effect: '#fab387',
+    composite: '#cba6f7',
+};
+
+// ── Preset Browser Component ─────────────────────────────
+
+export class PresetBrowser {
+    private container: HTMLElement;
+    private loader: PresetLoader;
+    private entries: CatalogEntry[] = [];
+    private filteredEntries: CatalogEntry[] = [];
+    private onSelect: ((entry: CatalogEntry) => void) | null = null;
+
+    private searchInput!: HTMLInputElement;
+    private listEl!: HTMLElement;
+    private statusEl!: HTMLElement;
+    private categoryFilter: PresetCategory | null = null;
+
+    private isOpen = false;
+
+    constructor(parentEl: HTMLElement, loader: PresetLoader) {
+        this.container = document.createElement('div');
+        this.container.className = 'preset-browser';
+        this.container.innerHTML = this.buildHTML();
+        parentEl.appendChild(this.container);
+
+        this.loader = loader;
+
+        this.searchInput = this.container.querySelector('.pb-search')!;
+        this.listEl = this.container.querySelector('.pb-list')!;
+        this.statusEl = this.container.querySelector('.pb-status')!;
+
+        this.bindEvents();
+        this.applyStyles();
+    }
+
+    /** Register a callback for when a preset entry is selected. */
+    onPresetSelect(cb: (entry: CatalogEntry) => void): void {
+        this.onSelect = cb;
+    }
+
+    /** Toggle panel open/closed. */
+    toggle(): void {
+        this.isOpen = !this.isOpen;
+        this.container.classList.toggle('open', this.isOpen);
+        if (this.isOpen && this.entries.length === 0) {
+            this.loadEntries();
+        }
+    }
+
+    /** Open the panel. */
+    open(): void {
+        if (!this.isOpen) this.toggle();
+    }
+
+    /** Close the panel. */
+    close(): void {
+        if (this.isOpen) this.toggle();
+    }
+
+    // ── Internal ─────────────────────────────────────────
+
+    private async loadEntries(): Promise<void> {
+        this.statusEl.textContent = 'Loading index…';
+        try {
+            const index = await this.loader.loadIndex();
+            this.entries = index.entries;
+            this.statusEl.textContent = `${this.entries.length} presets`;
+            this.applyFilter();
+        } catch (err) {
+            this.statusEl.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+    }
+
+    private applyFilter(): void {
+        const query = this.searchInput.value.trim();
+
+        if (query) {
+            this.filteredEntries = this.loader.fuzzySearch(query, 100);
+        } else {
+            this.filteredEntries = [...this.entries];
+        }
+
+        if (this.categoryFilter) {
+            this.filteredEntries = this.filteredEntries.filter(
+                e => e.category === this.categoryFilter,
+            );
+        }
+
+        this.renderList();
+    }
+
+    private renderList(): void {
+        const fragment = document.createDocumentFragment();
+
+        for (const entry of this.filteredEntries.slice(0, 200)) {
+            const item = document.createElement('div');
+            item.className = 'pb-item';
+            item.dataset.path = entry.path;
+
+            const colour = CATEGORY_COLOURS[entry.category] ?? '#cdd6f4';
+
+            item.innerHTML = `
+                <span class="pb-item-dot" style="background:${colour}"></span>
+                <span class="pb-item-name">${escapeHtml(entry.name)}</span>
+                <span class="pb-item-meta">${entry.zoneCount ? entry.zoneCount + 'z' : entry.category}</span>
+            `;
+
+            item.addEventListener('click', () => {
+                if (this.onSelect) this.onSelect(entry);
+            });
+
+            fragment.appendChild(item);
+        }
+
+        this.listEl.replaceChildren(fragment);
+
+        const total = this.filteredEntries.length;
+        const shown = Math.min(total, 200);
+        this.statusEl.textContent = total === shown
+            ? `${total} presets`
+            : `${shown} / ${total} presets`;
+    }
+
+    private bindEvents(): void {
+        this.searchInput.addEventListener('input', () => this.applyFilter());
+
+        // Category filter chips
+        const chips = this.container.querySelectorAll<HTMLElement>('.pb-chip');
+        chips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                const cat = chip.dataset.category as PresetCategory | 'all';
+                if (cat === 'all' || this.categoryFilter === cat) {
+                    this.categoryFilter = null;
+                    chips.forEach(c => c.classList.remove('active'));
+                    chip.classList.add('active');
+                } else {
+                    this.categoryFilter = cat as PresetCategory;
+                    chips.forEach(c => c.classList.remove('active'));
+                    chip.classList.add('active');
+                }
+                this.applyFilter();
+            });
+        });
+    }
+
+    private buildHTML(): string {
+        return `
+            <div class="pb-header">
+                <span class="pb-title">Presets</span>
+                <button class="pb-close" title="Close">&times;</button>
+            </div>
+            <input class="pb-search" type="text" placeholder="Search presets…" />
+            <div class="pb-filters">
+                <span class="pb-chip active" data-category="all">All</span>
+                <span class="pb-chip" data-category="sampler">Sampler</span>
+                <span class="pb-chip" data-category="synth">Synth</span>
+                <span class="pb-chip" data-category="composite">Composite</span>
+                <span class="pb-chip" data-category="effect">Effect</span>
+            </div>
+            <div class="pb-list"></div>
+            <div class="pb-status">Click "Presets" to load</div>
+        `;
+    }
+
+    private applyStyles(): void {
+        if (document.getElementById('pb-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'pb-styles';
+        style.textContent = `
+.preset-browser {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 280px;
+    background: var(--surface, #181825);
+    border-left: 1px solid var(--border, #313244);
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    z-index: 50;
+    font-size: 0.85rem;
+}
+.preset-browser.open {
+    transform: translateX(0);
+}
+.pb-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border, #313244);
+}
+.pb-title {
+    font-weight: 600;
+    color: var(--accent, #89b4fa);
+}
+.pb-close {
+    background: none;
+    border: none;
+    color: var(--subtext, #a6adc8);
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0 4px;
+    line-height: 1;
+}
+.pb-search {
+    margin: 0.5rem 0.75rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--border, #313244);
+    background: var(--overlay, #11111b);
+    color: var(--text, #cdd6f4);
+    font-size: 0.8rem;
+    outline: none;
+}
+.pb-search:focus {
+    border-color: var(--accent, #89b4fa);
+}
+.pb-filters {
+    display: flex;
+    gap: 4px;
+    padding: 0 0.75rem 0.5rem;
+    flex-wrap: wrap;
+}
+.pb-chip {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    background: var(--overlay, #11111b);
+    border: 1px solid var(--border, #313244);
+    color: var(--subtext, #a6adc8);
+    user-select: none;
+}
+.pb-chip.active {
+    background: var(--accent, #89b4fa);
+    color: var(--bg, #1e1e2e);
+    border-color: var(--accent, #89b4fa);
+    font-weight: 600;
+}
+.pb-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 0.5rem;
+}
+.pb-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.pb-item:hover {
+    background: var(--border, #313244);
+}
+.pb-item-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.pb-item-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text, #cdd6f4);
+    font-size: 0.8rem;
+}
+.pb-item-meta {
+    font-size: 0.65rem;
+    color: var(--subtext, #a6adc8);
+    flex-shrink: 0;
+}
+.pb-status {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.7rem;
+    color: var(--subtext, #a6adc8);
+    border-top: 1px solid var(--border, #313244);
+}
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+function escapeHtml(text: string): string {
+    const el = document.createElement('span');
+    el.textContent = text;
+    return el.innerHTML;
+}

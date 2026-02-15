@@ -10,7 +10,6 @@ pub enum Token {
     Track,
     Const,
     Let,
-    Await,
     For,
 
     // Punctuation
@@ -69,7 +68,6 @@ pub fn token_to_string(token: &Token) -> String {
         Token::Track => "track".into(),
         Token::Const => "const".into(),
         Token::Let => "let".into(),
-        Token::Await => "await".into(),
         Token::For => "for".into(),
         Token::Star => "*".into(),
         Token::At => "@".into(),

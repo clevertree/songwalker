@@ -1,5 +1,7 @@
 import init, { compile_song } from './wasm/songwalker_core.js';
 import { SongPlayer } from './player.js';
+import { PresetLoader } from './preset-loader.js';
+import { PresetBrowser } from './preset-browser.js';
 import * as monaco from 'monaco-editor';
 import {
     LANGUAGE_ID,
@@ -584,8 +586,25 @@ async function main() {
     const saveBtn = document.getElementById('save-btn')!;
     const exportBtn = document.getElementById('export-btn')!;
     const fullscreenBtn = document.getElementById('fullscreen-btn')!;
+    const presetBtn = document.getElementById('preset-btn')!;
     const statusEl = document.getElementById('status')!;
     const errorEl = document.getElementById('error')!;
+
+    // Preset browser
+    const presetLoader = new PresetLoader('https://cdn.songwalker.net/library');
+    const editorWrapper = document.querySelector('.editor-wrapper') as HTMLElement;
+    const presetBrowser = new PresetBrowser(editorWrapper, presetLoader);
+    presetBrowser.onPresetSelect((entry) => {
+        // Insert a loadPreset comment/reference at cursor
+        const position = editor.getPosition();
+        if (position) {
+            const text = `// Preset: ${entry.name} (${entry.path})\n`;
+            editor.executeEdits('preset-browser', [{
+                range: new monaco.Range(position.lineNumber, 1, position.lineNumber, 1),
+                text,
+            }]);
+        }
+    });
 
     // Compile and play using Rust DSP engine
     function compileAndPlay() {
@@ -646,6 +665,10 @@ async function main() {
     fullscreenBtn.addEventListener('click', () => {
         document.documentElement.classList.toggle('fullscreen');
         setTimeout(() => editor.layout(), 100);
+    });
+
+    presetBtn.addEventListener('click', () => {
+        presetBrowser.toggle();
     });
 
     // Register Ctrl+Enter as a Monaco keybinding

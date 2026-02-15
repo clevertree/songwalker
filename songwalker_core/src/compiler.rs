@@ -45,6 +45,9 @@ pub struct InstrumentConfig {
     pub detune: Option<f64>,
     /// Mix level [0, 1].
     pub mixer: Option<f64>,
+    /// Preset reference name (from `loadPreset("name")`).
+    /// Used for compile-time extraction and runtime preloading.
+    pub preset_ref: Option<String>,
 }
 
 impl Default for InstrumentConfig {
@@ -57,6 +60,7 @@ impl Default for InstrumentConfig {
             release: None,
             detune: None,
             mixer: None,
+            preset_ref: None,
         }
     }
 }
@@ -106,6 +110,8 @@ pub enum EventKind {
     },
     /// Set a property.
     SetProperty { target: String, value: String },
+    /// Preset reference (for compile-time extraction / preloading).
+    PresetRef { name: String },
 }
 
 // ── Compiler ────────────────────────────────────────────────
@@ -248,6 +254,15 @@ fn compile_statement(ctx: &mut CompileCtx, stmt: &Statement) -> Result<(), Strin
         Statement::ConstDecl { name, value } => {
             // Resolve the expression to an InstrumentConfig and store it.
             let config = evaluate_instrument_expr(ctx, value)?;
+            // Emit a PresetRef event if this references an external preset.
+            if let Some(ref preset_name) = config.preset_ref {
+                ctx.events.push(Event {
+                    time: 0.0,
+                    kind: EventKind::PresetRef {
+                        name: preset_name.clone(),
+                    },
+                });
+            }
             ctx.consts.insert(name.clone(), config);
             Ok(())
         }
@@ -310,64 +325,67 @@ fn evaluate_instrument_expr(ctx: &CompileCtx, expr: &Expr) -> Result<InstrumentC
                     }
                     Ok(config)
                 }
-                _ => Err(format!("Unknown instrument preset '{function}'.")),
-            }
-        }
-        Expr::AwaitCall { function, args } => {
-            // Backward compat: `await loadPreset("Oscillator", {type:'square'})`
-            if function == "loadPreset" {
-                let mut config = InstrumentConfig::default();
-                // First arg might be a string identifying the preset type.
-                if let Some(Expr::StringLit(preset_name)) = args.first() {
-                    if preset_name == "Oscillator" {
-                        if let Some(Expr::ObjectLit(pairs)) = args.get(1) {
-                            for (key, value) in pairs {
-                                match key.as_str() {
-                                    "type" => {
-                                        if let Expr::StringLit(s) = value {
-                                            config.waveform = s.clone();
+                "loadPreset" => {
+                    // loadPreset("name") — resolve preset by name.
+                    // Currently produces a default config; runtime preloading
+                    // uses extract_preset_refs() to discover references.
+                    let mut config = InstrumentConfig::default();
+                    if let Some(Expr::StringLit(preset_name)) = args.first() {
+                        config.preset_ref = Some(preset_name.clone());
+                        // If the preset name looks like an oscillator type, use it
+                        match preset_name.as_str() {
+                            "Oscillator" => {
+                                if let Some(Expr::ObjectLit(pairs)) = args.get(1) {
+                                    for (key, value) in pairs {
+                                        match key.as_str() {
+                                            "type" => {
+                                                if let Expr::StringLit(s) = value {
+                                                    config.waveform = s.clone();
+                                                }
+                                            }
+                                            "attack" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.attack = Some(*n);
+                                                }
+                                            }
+                                            "decay" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.decay = Some(*n);
+                                                }
+                                            }
+                                            "sustain" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.sustain = Some(*n);
+                                                }
+                                            }
+                                            "release" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.release = Some(*n);
+                                                }
+                                            }
+                                            "detune" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.detune = Some(*n);
+                                                }
+                                            }
+                                            "mixer" => {
+                                                if let Expr::Number(n) = value {
+                                                    config.mixer = Some(*n);
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
-                                    "attack" => {
-                                        if let Expr::Number(n) = value {
-                                            config.attack = Some(*n);
-                                        }
-                                    }
-                                    "decay" => {
-                                        if let Expr::Number(n) = value {
-                                            config.decay = Some(*n);
-                                        }
-                                    }
-                                    "sustain" => {
-                                        if let Expr::Number(n) = value {
-                                            config.sustain = Some(*n);
-                                        }
-                                    }
-                                    "release" => {
-                                        if let Expr::Number(n) = value {
-                                            config.release = Some(*n);
-                                        }
-                                    }
-                                    "detune" => {
-                                        if let Expr::Number(n) = value {
-                                            config.detune = Some(*n);
-                                        }
-                                    }
-                                    "mixer" => {
-                                        if let Expr::Number(n) = value {
-                                            config.mixer = Some(*n);
-                                        }
-                                    }
-                                    _ => {}
                                 }
+                            }
+                            _ => {
+                                // External preset — will be loaded at runtime
                             }
                         }
                     }
-                    // else: unknown preset name, return default
+                    Ok(config)
                 }
-                Ok(config)
-            } else {
-                Ok(InstrumentConfig::default())
+                _ => Err(format!("Unknown instrument preset '{function}'.")),
             }
         }
         Expr::Identifier(name) => {
@@ -396,6 +414,12 @@ fn compile_assignment(ctx: &mut CompileCtx, target: &str, value: &Expr) -> Resul
     if target == "track.beatsPerMinute" {
         ctx.emit(EventKind::SetProperty {
             target: target.to_string(),
+            value: expr_to_string(value),
+        });
+    } else if target == "track.tuningPitch" || target == "track.a4Frequency" {
+        // Emit as track.tuningPitch regardless of which alias was used.
+        ctx.emit(EventKind::SetProperty {
+            target: "track.tuningPitch".to_string(),
             value: expr_to_string(value),
         });
     } else if target == "track.noteLength" || target == "track.duration" {
@@ -596,6 +620,20 @@ fn compile_track_statement(ctx: &mut CompileCtx, stmt: &TrackStatement) -> Resul
         }
         TrackStatement::Comment(_) => Ok(()),
     }
+}
+
+/// Extract all preset references from a compiled event list.
+/// Used for compile-time preloading of preset assets before playback.
+pub fn extract_preset_refs(event_list: &EventList) -> Vec<String> {
+    let mut refs = Vec::new();
+    for event in &event_list.events {
+        if let EventKind::PresetRef { name } = &event.kind {
+            if !refs.contains(name) {
+                refs.push(name.clone());
+            }
+        }
+    }
+    refs
 }
 
 #[cfg(test)]

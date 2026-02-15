@@ -35,7 +35,7 @@ export const monarchTokens: monaco.languages.IMonarchLanguage = {
     defaultToken: '',
     ignoreCase: false,
 
-    keywords: ['track', 'const', 'let', 'await', 'for'],
+    keywords: ['track', 'const', 'let', 'for'],
 
     notes: [
         'C', 'D', 'E', 'F', 'G', 'A', 'B',
@@ -62,7 +62,7 @@ export const monarchTokens: monaco.languages.IMonarchLanguage = {
             [/\b(Kick|Snare|HiHat|Crash|Ride|Tom|OpenHiHat|ClosedHiHat|Clap|Rimshot)\b/, 'variable.drum'],
 
             // Keywords
-            [/\b(track|const|let|await|for)\b/, 'keyword'],
+            [/\b(track|const|let|for)\b/, 'keyword'],
 
             // Property access: track.something
             [/\b(track)\.([\w.]+)/, ['keyword', 'variable.property']],
@@ -155,9 +155,10 @@ export const completionItems: monaco.languages.CompletionItem[] = [
     {
         label: 'loadPreset',
         kind: 3, // Function
-        insertText: 'await loadPreset(${0})',
+        insertText: 'loadPreset("${0}")',
         insertTextRules: 4,
-        detail: 'Load an instrument preset (legacy)',
+        detail: 'Load an instrument preset by name',
+        documentation: 'Loads a preset from the catalog. Preset assets are preloaded at compile time.',
     },
     {
         label: 'Oscillator',

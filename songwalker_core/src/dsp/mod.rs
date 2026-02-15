@@ -10,4 +10,7 @@ pub mod filter;
 pub mod mixer;
 pub mod oscillator;
 pub mod renderer;
+pub mod sampler;
+pub mod composite;
+pub mod tuner;
 pub mod voice;

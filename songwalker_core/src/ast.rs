@@ -107,11 +107,7 @@ pub enum Expr {
     Identifier(String),
     Array(Vec<Expr>),
     ObjectLit(Vec<(String, Expr)>),
-    AwaitCall {
-        function: String,
-        args: Vec<Expr>,
-    },
-    /// `Oscillator({type: 'square'})` — built-in preset call.
+    /// `Oscillator({type: 'square'})` or `loadPreset("name")` — preset/instrument call.
     FunctionCall {
         function: String,
         args: Vec<Expr>,

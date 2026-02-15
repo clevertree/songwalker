@@ -4,6 +4,7 @@ pub mod dsp;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod preset;
 pub mod token;
 
 use crate::error::SongWalkerError;

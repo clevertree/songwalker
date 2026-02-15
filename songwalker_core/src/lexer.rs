@@ -296,7 +296,6 @@ impl Lexer {
             "track" => Token::Track,
             "const" => Token::Const,
             "let" => Token::Let,
-            "await" => Token::Await,
             "for" => Token::For,
             _ => Token::Ident(text),
         };

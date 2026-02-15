@@ -583,7 +583,6 @@ impl Parser {
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         match self.peek() {
-            Token::Await => self.parse_await_expr(),
             Token::Number(n) => {
                 self.advance();
                 // Check for fraction
@@ -638,15 +637,6 @@ impl Parser {
                 span: self.span(),
             }),
         }
-    }
-
-    fn parse_await_expr(&mut self) -> Result<Expr, ParseError> {
-        self.expect(&Token::Await)?;
-        let function = self.expect_ident()?;
-        self.expect(&Token::LParen)?;
-        let args = self.parse_call_args()?;
-        self.expect(&Token::RParen)?;
-        Ok(Expr::AwaitCall { function, args })
     }
 
     fn parse_array_expr(&mut self) -> Result<Expr, ParseError> {
@@ -803,16 +793,16 @@ track t() {
 
     #[test]
     fn test_parse_const_decl() {
-        let program = parse(r#"const lead = await loadPreset("Guitar");"#).unwrap();
+        let program = parse(r#"const lead = loadPreset("Guitar");"#).unwrap();
         match &program.statements[0] {
             Statement::ConstDecl { name, value } => {
                 assert_eq!(name, "lead");
                 match value {
-                    Expr::AwaitCall { function, args } => {
+                    Expr::FunctionCall { function, args } => {
                         assert_eq!(function, "loadPreset");
                         assert_eq!(args.len(), 1);
                     }
-                    other => panic!("Expected AwaitCall, got {other:?}"),
+                    other => panic!("Expected FunctionCall, got {other:?}"),
                 }
             }
             other => panic!("Expected ConstDecl, got {other:?}"),
@@ -990,7 +980,7 @@ track t() {
     #[test]
     fn test_parse_full_program() {
         let input = r#"
-const lead = await loadPreset("Guitar");
+const lead = loadPreset("Guitar");
 track.beatsPerMinute = 160;
 
 riff(lead);

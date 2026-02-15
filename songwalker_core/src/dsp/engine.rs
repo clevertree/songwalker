@@ -8,8 +8,8 @@ use crate::compiler::{EndMode, EventKind, EventList, InstrumentConfig};
 use super::mixer::Mixer;
 use super::voice::Voice;
 
-/// Note-to-frequency conversion matching the JS `noteToFrequency`.
-pub fn note_to_frequency(note: &str) -> Option<f64> {
+/// Parse a note name (e.g. "C4", "F#3", "Bb5") into a MIDI note number.
+pub fn note_to_midi(note: &str) -> Option<i32> {
     let bytes = note.as_bytes();
     if bytes.is_empty() {
         return None;
@@ -51,9 +51,31 @@ pub fn note_to_frequency(note: &str) -> Option<f64> {
     let octave: i32 = octave_str.parse().ok()?;
 
     // MIDI note number: C4 = 60
-    let midi = (octave + 1) * 12 + semitone;
-    // A4 (MIDI 69) = 440 Hz
-    Some(440.0 * (2.0_f64).powf((midi as f64 - 69.0) / 12.0))
+    Some((octave + 1) * 12 + semitone)
+}
+
+/// Convert a MIDI note number to frequency using the given tuning pitch.
+///
+/// `tuning_pitch` is the frequency of A4 (MIDI 69). Default is 440.0 Hz.
+/// Formula: `tuning_pitch * 2^((midi - 69) / 12)`
+pub fn midi_to_frequency(midi: i32, tuning_pitch: f64) -> f64 {
+    tuning_pitch * (2.0_f64).powf((midi as f64 - 69.0) / 12.0)
+}
+
+/// Note-to-frequency conversion matching the JS `noteToFrequency`.
+///
+/// Uses the standard A4 = 440 Hz tuning. For custom tuning, use
+/// `note_to_midi()` + `midi_to_frequency()`.
+pub fn note_to_frequency(note: &str) -> Option<f64> {
+    note_to_frequency_with_tuning(note, 440.0)
+}
+
+/// Note-to-frequency conversion with configurable tuning pitch.
+///
+/// `tuning_pitch` is the frequency of A4. Common values: 440.0, 432.0.
+pub fn note_to_frequency_with_tuning(note: &str, tuning_pitch: f64) -> Option<f64> {
+    let midi = note_to_midi(note)?;
+    Some(midi_to_frequency(midi, tuning_pitch))
 }
 
 /// Scheduled voice event for the engine.
@@ -72,6 +94,8 @@ struct ScheduledNote {
 pub struct AudioEngine {
     pub sample_rate: f64,
     pub bpm: f64,
+    /// Tuning pitch for A4 in Hz. Default is 440.0.
+    pub tuning_pitch: f64,
     max_voices: usize,
 }
 
@@ -80,19 +104,25 @@ impl AudioEngine {
         AudioEngine {
             sample_rate,
             bpm: 120.0,
+            tuning_pitch: 440.0,
             max_voices: 64,
         }
     }
 
     /// Render an entire EventList to mono f64 samples.
     pub fn render(&self, event_list: &EventList) -> Vec<f64> {
-        // Extract BPM from events
+        // Extract BPM and tuning from events
         let mut bpm = self.bpm;
+        let mut tuning_pitch = self.tuning_pitch;
         for evt in &event_list.events {
             if let EventKind::SetProperty { target, value } = &evt.kind {
                 if target == "track.beatsPerMinute" {
                     if let Ok(v) = value.parse::<f64>() {
                         bpm = v;
+                    }
+                } else if target == "track.tuningPitch" {
+                    if let Ok(v) = value.parse::<f64>() {
+                        tuning_pitch = v;
                     }
                 }
             }
@@ -114,7 +144,7 @@ impl AudioEngine {
                 ..
             } = &evt.kind
             {
-                if let Some(freq) = note_to_frequency(pitch) {
+                if let Some(freq) = note_to_frequency_with_tuning(pitch, tuning_pitch) {
                     let start = {
                         let s = evt.time * 60.0 / bpm;
                         (s * self.sample_rate) as usize
@@ -311,6 +341,111 @@ mod tests {
             (sharp - flat).abs() < 0.01,
             "F#4 and Gb4 should be the same frequency"
         );
+    }
+
+    // ── Tuning tests (T-1 through T-6 from test plan) ──
+
+    #[test]
+    fn tuning_default_a4_440() {
+        // T-1: Default tuning, A4 = 440 Hz
+        let f = note_to_frequency_with_tuning("A4", 440.0).unwrap();
+        assert!((f - 440.0).abs() < 0.01, "A4@440 should be 440Hz, got {f}");
+    }
+
+    #[test]
+    fn tuning_432_a4() {
+        // T-2: tuningPitch = 432, A4 = 432 Hz
+        let f = note_to_frequency_with_tuning("A4", 432.0).unwrap();
+        assert!((f - 432.0).abs() < 0.01, "A4@432 should be 432Hz, got {f}");
+    }
+
+    #[test]
+    fn tuning_432_c4() {
+        // T-3: tuningPitch = 432, C4 (MIDI 60) ≈ 256.87 Hz
+        let f = note_to_frequency_with_tuning("C4", 432.0).unwrap();
+        let expected = 432.0 * (2.0_f64).powf((60.0 - 69.0) / 12.0);
+        assert!(
+            (f - expected).abs() < 0.01,
+            "C4@432 should be ~{expected:.2}Hz, got {f}"
+        );
+    }
+
+    #[test]
+    fn tuning_440_all_midi_notes() {
+        // T-4: All 128 MIDI notes match standard 12-TET table at 440Hz
+        let note_names = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
+        for midi in 0..128 {
+            let octave = (midi / 12) - 1;
+            let note_idx = midi % 12;
+            let name = format!("{}{}", note_names[note_idx as usize], octave);
+            if let Some(f) = note_to_frequency_with_tuning(&name, 440.0) {
+                let expected = 440.0 * (2.0_f64).powf((midi as f64 - 69.0) / 12.0);
+                assert!(
+                    (f - expected).abs() < 0.001,
+                    "MIDI {midi} ({name}) should be {expected:.3}Hz, got {f:.3}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn note_to_midi_basic() {
+        assert_eq!(note_to_midi("A4"), Some(69));
+        assert_eq!(note_to_midi("C4"), Some(60));
+        assert_eq!(note_to_midi("C0"), Some(12));
+        assert_eq!(note_to_midi("C-1"), Some(0));
+    }
+
+    #[test]
+    fn midi_to_frequency_basic() {
+        assert!((midi_to_frequency(69, 440.0) - 440.0).abs() < 0.001);
+        assert!((midi_to_frequency(69, 432.0) - 432.0).abs() < 0.001);
+        assert!((midi_to_frequency(60, 440.0) - 261.626).abs() < 0.01);
+    }
+
+    #[test]
+    fn render_with_tuning_pitch() {
+        // T-5/T-6: Engine respects track.tuningPitch from events
+        let engine = AudioEngine::new(44100.0);
+        let song = EventList {
+            events: vec![
+                Event {
+                    time: 0.0,
+                    kind: EventKind::SetProperty {
+                        target: "track.beatsPerMinute".to_string(),
+                        value: "120".to_string(),
+                    },
+                },
+                Event {
+                    time: 0.0,
+                    kind: EventKind::SetProperty {
+                        target: "track.tuningPitch".to_string(),
+                        value: "432".to_string(),
+                    },
+                },
+                Event {
+                    time: 0.0,
+                    kind: EventKind::Note {
+                        pitch: "A4".to_string(),
+                        velocity: 100.0,
+                        gate: 1.0,
+                        instrument: InstrumentConfig::default(),
+                        source_start: 0,
+                        source_end: 0,
+                    },
+                },
+            ],
+            total_beats: 1.0,
+            end_mode: EndMode::Gate,
+        };
+        let audio = engine.render(&song);
+        // Should produce non-silent output (the tuning change is applied)
+        let max = audio.iter().fold(0.0_f64, |m, &s| m.max(s.abs()));
+        assert!(max > 0.01, "Tuned audio should be non-silent, max={max}");
+        // Audio length should be correct: 1 beat at 120 BPM = 0.5s = 22050 samples
+        assert_eq!(audio.len(), 22050);
     }
 
     #[test]

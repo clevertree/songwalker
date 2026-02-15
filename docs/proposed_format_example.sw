@@ -3,10 +3,10 @@
 // Based on public/song/test.sw
 
 // 1. Setup & Presets
-const lead = await loadPreset(/FluidR3.*\/.*Guitar/i);
-const drums = await loadPreset("FluidR3/StandardKit");
-const osc = await loadPreset("Oscillator", {'type':'square', mixer: 0.4});
-const reverb = await loadPreset("Reverb");
+const lead = loadPreset(/FluidR3.*\/.*Guitar/i);
+const drums = loadPreset("FluidR3/StandardKit");
+const osc = Oscillator({type: 'square', mixer: 0.4});
+const reverb = loadPreset("Reverb");
 
 track.beatsPerMinute = 160;
 
