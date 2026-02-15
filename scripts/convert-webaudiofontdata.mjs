@@ -3,7 +3,7 @@
  * convert-webaudiofontdata.mjs
  *
  * Converts webaudiofontdata JSON instrument files to the unified
- * songwalker-library preset format.
+ * songwalker-library preset format, organized by source library.
  *
  * Usage:
  *   node scripts/convert-webaudiofontdata.mjs \
@@ -15,7 +15,9 @@
  * 2. Processes each JSON instrument file from i/, p/, s/ directories
  * 3. Extracts base64 audio → WAV files with SHA256 dedup
  * 4. Creates preset.json for each instrument
- * 5. Organizes by GM category folders
+ * 5. Organizes by source library first, then GM category
+ * 6. Generates per-library index.json files (generic format)
+ * 7. Generates root index.json linking to each library
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
@@ -183,16 +185,16 @@ function convertInstrument(filePath, gmProgram, instrumentName, libraryName, var
     const isPercussion = zones.some(z => z.midi === 128);
     const category = isPercussion ? 'percussion' : GM_CATEGORIES[gmProgram] || 'unknown';
 
-    // Create a safe directory name
+    // Create a safe directory name (WITHOUT library prefix — library is the parent dir)
     const safeName = instrumentName.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_');
     const safeLib = libraryName.replace(/[^a-zA-Z0-9]/g, '_');
-    const dirName = `${safeLib}_${safeName}`;
 
+    // Output: {Library}/instruments/{category}/{Name}/ or {Library}/percussion/individual/{Name}/
     let presetPath;
     if (isPercussion) {
-        presetPath = join(OUTPUT_DIR, 'percussion', 'individual', dirName);
+        presetPath = join(OUTPUT_DIR, safeLib, 'percussion', 'individual', safeName);
     } else {
-        presetPath = join(OUTPUT_DIR, 'instruments', category, dirName);
+        presetPath = join(OUTPUT_DIR, safeLib, 'instruments', category, safeName);
     }
 
     if (!DRY_RUN) {
@@ -213,30 +215,28 @@ function convertInstrument(filePath, gmProgram, instrumentName, libraryName, var
     tags.push(isPercussion ? 'percussion' : 'melodic');
     if (!isPercussion) tags.push(category);
     tags.push(`gm:${gmProgram}`);
-    tags.push(`library:${libraryName}`);
 
     // Check for loop support
     if (convertedZones.some(z => z.loop)) tags.push('sustained', 'looped');
     else tags.push('one-shot');
 
-    const id = `${safeLib.toLowerCase()}-${safeName.toLowerCase().replace(/_/g, '-')}`;
-
     const preset = {
-        id,
+        format: 'songwalker-preset',
+        version: 1,
         name: instrumentName,
-        category: isPercussion ? 'sampler' : 'sampler',
+        category: 'sampler',
         tags,
         metadata: {
             gmProgram,
             gmCategory: isPercussion ? 'Percussion' : GM_CATEGORIES[gmProgram],
-            sourceLibrary: libraryName,
+            source: libraryName,
             variant,
             license: 'See original SF2 license',
         },
-        graph: {
+        node: {
             type: 'sampler',
             config: {
-                isDrumKit: isPercussion,
+                oneShot: isPercussion,
                 zones: convertedZones,
             },
         },
@@ -249,20 +249,22 @@ function convertInstrument(filePath, gmProgram, instrumentName, libraryName, var
         );
     }
 
+    // Return path relative to library folder (e.g., instruments/piano/Acoustic_Grand_Piano/preset.json)
+    const libraryDir = join(OUTPUT_DIR, safeLib);
+    const relativePath = presetPath.replace(libraryDir + '/', '') + '/preset.json';
+
     return {
-        id: preset.id,
-        name: preset.name,
-        path: presetPath.replace(OUTPUT_DIR + '/', '') + '/preset.json',
-        category: preset.category,
-        tags: preset.tags,
+        name: instrumentName,
+        path: relativePath,
+        category: 'sampler',
+        tags,
         gmProgram,
-        sourceLibrary: libraryName,
+        library: safeLib,
         zoneCount: convertedZones.length,
         keyRange: {
             low: Math.min(...convertedZones.map(z => z.keyRange.low)),
             high: Math.max(...convertedZones.map(z => z.keyRange.high)),
         },
-        tuningVerified: false,
     };
 }
 
@@ -312,19 +314,13 @@ function main() {
         process.exit(1);
     }
 
-    // Create output directories
+    // Create base output dir
     if (!DRY_RUN) {
-        mkdirSync(join(OUTPUT_DIR, 'instruments'), { recursive: true });
-        mkdirSync(join(OUTPUT_DIR, 'percussion', 'individual'), { recursive: true });
-        mkdirSync(join(OUTPUT_DIR, 'percussion', 'drum-kits'), { recursive: true });
-        mkdirSync(join(OUTPUT_DIR, 'synths'), { recursive: true });
-        mkdirSync(join(OUTPUT_DIR, 'effects'), { recursive: true });
-        for (const cat of new Set(GM_CATEGORIES)) {
-            mkdirSync(join(OUTPUT_DIR, 'instruments', cat), { recursive: true });
-        }
+        mkdirSync(OUTPUT_DIR, { recursive: true });
     }
 
-    const catalogEntries = [];
+    // catalogEntries grouped by library: Map<libraryName, entry[]>
+    const entriesByLibrary = new Map();
     let convertedCount = 0;
     let errorCount = 0;
 
@@ -353,7 +349,9 @@ function main() {
                     info.variant
                 );
                 if (entry) {
-                    catalogEntries.push(entry);
+                    const lib = entry.library;
+                    if (!entriesByLibrary.has(lib)) entriesByLibrary.set(lib, []);
+                    entriesByLibrary.get(lib).push(entry);
                     convertedCount++;
                     if (convertedCount % 50 === 0) {
                         console.log(`  Converted ${convertedCount} instruments...`);
@@ -390,10 +388,12 @@ function main() {
                     info.variant
                 );
                 if (entry) {
-                    // Override category
-                    entry.category = 'sampler';
-                    entry.tags = ['percussion', `midi:${info.midiNote}`, `library:${info.library}`];
-                    catalogEntries.push(entry);
+                    // Override category tags for percussion
+                    entry.tags = ['percussion', `midi:${info.midiNote}`];
+
+                    const lib = entry.library;
+                    if (!entriesByLibrary.has(lib)) entriesByLibrary.set(lib, []);
+                    entriesByLibrary.get(lib).push(entry);
                     convertedCount++;
                     percCount++;
                     if (percCount % 100 === 0) {
@@ -407,26 +407,70 @@ function main() {
         }
     }
 
-    // ── Write catalog ──
+    // ── Write per-library indexes (generic format) ──
     console.log();
     console.log(`Total converted: ${convertedCount}`);
     console.log(`Errors: ${errorCount}`);
     console.log(`Unique audio files: ${audioHashes.size}`);
     console.log(`Dedup savings: ${totalDedupSaved} duplicates skipped`);
+    console.log(`Libraries: ${entriesByLibrary.size}`);
 
-    if (!DRY_RUN) {
-        const index = {
+    const rootEntries = [];
+
+    for (const [libraryName, entries] of entriesByLibrary) {
+        // Build per-library index
+        const libraryIndex = {
+            format: 'songwalker-index',
             version: 1,
-            generatedAt: new Date().toISOString(),
-            presets: catalogEntries,
+            name: libraryName.replace(/_/g, ' '),
+            description: `${libraryName} soundfont — ${entries.length} presets`,
+            entries: entries.map(e => ({
+                type: 'preset',
+                name: e.name,
+                path: e.path,
+                category: e.category,
+                tags: e.tags,
+                ...(e.gmProgram < 128 ? { gmProgram: e.gmProgram } : {}),
+                zoneCount: e.zoneCount,
+                keyRange: e.keyRange,
+            })),
+        };
+
+        if (!DRY_RUN) {
+            writeFileSync(
+                join(OUTPUT_DIR, libraryName, 'index.json'),
+                JSON.stringify(libraryIndex, null, 2)
+            );
+        }
+
+        console.log(`  Wrote ${libraryName}/index.json (${entries.length} presets)`);
+
+        // Add to root index
+        rootEntries.push({
+            type: 'index',
+            name: libraryName.replace(/_/g, ' '),
+            path: `${libraryName}/index.json`,
+            description: `${libraryName} soundfont`,
+            presetCount: entries.length,
+        });
+    }
+
+    // ── Write root index ──
+    if (!DRY_RUN) {
+        const rootIndex = {
+            format: 'songwalker-index',
+            version: 1,
+            name: 'SongWalker Library',
+            description: 'Root index — select a source library to browse its presets',
+            entries: rootEntries,
         };
         writeFileSync(
             join(OUTPUT_DIR, 'index.json'),
-            JSON.stringify(index, null, 2)
+            JSON.stringify(rootIndex, null, 2)
         );
-        console.log(`Wrote index.json with ${catalogEntries.length} entries`);
+        console.log(`Wrote root index.json with ${rootEntries.length} libraries`);
     } else {
-        console.log(`(Dry run — ${catalogEntries.length} entries would be written)`);
+        console.log(`(Dry run — ${entriesByLibrary.size} library indexes would be written)`);
     }
 }
 

@@ -124,130 +124,260 @@ playbackRate = 2^((100 * targetMidiNote - baseDetune) / 1200)
 
 #### 3.6.1 Repository Structure
 
+The library is organized **by source library** at the top level. Each source library (SF2 soundfont) is a self-contained folder with its own index file. This design means:
+- Users only download indexes for libraries they want to search
+- Libraries can be added/removed independently
+- No single massive index file
+
 ```
 songwalker-library/
-├── index.json                          # Root index (auto-generated)
+├── index.json                          # Root index: lists available libraries only
 ├── .husky/
 │   └── pre-commit                      # Runs index generation script
 ├── scripts/
-│   └── generate-index.js               # Scans all presets, builds index.json
-├── instruments/
-│   ├── piano/
-│   │   ├── FluidR3_GM_Acoustic_Grand_Piano/
-│   │   │   ├── preset.json             # PresetDescriptor (references sample files)
-│   │   │   ├── zone_C2.wav             # Sample for C2 zone
-│   │   │   ├── zone_E2.wav             # Sample for E2 zone
-│   │   │   ├── zone_Ab2.wav
-│   │   │   └── ...                     # One sample file per zone
-│   │   ├── Aspirin_Acoustic_Grand_Piano/
-│   │   │   ├── preset.json
-│   │   │   └── ...samples...
-│   │   └── GeneralUserGS_Acoustic_Grand_Piano/
-│   │       ├── preset.json
-│   │       └── ...samples...
-│   ├── guitar/
-│   │   ├── FluidR3_GM_Nylon_Guitar/
-│   │   │   ├── preset.json
-│   │   │   └── ...samples...
-│   │   └── FluidR3_GM_Steel_Guitar/
-│   │       ├── preset.json
-│   │       └── ...samples...
-│   ├── organ/
-│   ├── strings/
-│   ├── brass/
-│   ├── reed/
-│   ├── pipe/
-│   ├── synth-lead/
-│   ├── synth-pad/
-│   ├── synth-effects/
-│   ├── ethnic/
-│   ├── chromatic-percussion/
-│   ├── sound-effects/
-│   └── bass/
-├── percussion/
-│   ├── drum-kits/
-│   │   ├── FluidR3_GM_Standard/
-│   │   │   ├── preset.json             # Composite preset with 47 sampler children
-│   │   │   ├── kick.wav                # MIDI 35-36
-│   │   │   ├── snare.wav               # MIDI 38-40
-│   │   │   ├── hihat_closed.wav        # MIDI 42
-│   │   │   └── ...                     # One sample per percussion sound
-│   │   ├── FluidR3_GM_Jazz/
-│   │   ├── FluidR3_GM_Room/
-│   │   └── ...
-│   └── individual/                     # Single percussion sounds (optional use)
-│       ├── kick/
-│       ├── snare/
-│       ├── hihat/
+│   └── generate-index.js               # Scans all libraries, builds root + per-library indexes
+├── FluidR3_GM/
+│   ├── index.json                      # Library index: lists all presets in this library
+│   ├── instruments/
+│   │   ├── piano/
+│   │   │   ├── Acoustic_Grand_Piano/
+│   │   │   │   ├── preset.json         # PresetDescriptor (references sample files)
+│   │   │   │   ├── zone_C2.wav         # Sample for C2 zone
+│   │   │   │   ├── zone_E2.wav
+│   │   │   │   └── ...
+│   │   │   ├── Bright_Acoustic_Piano/
+│   │   │   │   ├── preset.json
+│   │   │   │   └── ...samples...
+│   │   │   └── Honky_Tonk_Piano/
+│   │   │       ├── preset.json
+│   │   │       └── ...samples...
+│   │   ├── guitar/
+│   │   │   ├── Nylon_Guitar/
+│   │   │   │   ├── preset.json
+│   │   │   │   └── ...samples...
+│   │   │   └── Steel_Guitar/
+│   │   │       ├── preset.json
+│   │   │       └── ...samples...
+│   │   ├── organ/
+│   │   ├── strings/
+│   │   ├── brass/
+│   │   ├── bass/
+│   │   └── ...                         # Other GM instrument categories
+│   ├── percussion/
+│   │   ├── drum-kits/
+│   │   │   ├── Standard/
+│   │   │   │   ├── preset.json         # Composite preset with per-note sampler children
+│   │   │   │   ├── kick.wav
+│   │   │   │   ├── snare.wav
+│   │   │   │   └── ...
+│   │   │   ├── Jazz/
+│   │   │   ├── Room/
+│   │   │   └── ...
+│   │   └── individual/                 # Single percussion sounds (optional)
+│   │       ├── kick/
+│   │       ├── snare/
+│   │       └── ...
+│   └── effects/                        # Library-specific effects (if any)
 │       └── ...
-├── effects/
-│   ├── reverb/
-│   │   └── preset.json
-│   ├── delay/
-│   │   └── preset.json
-│   └── chorus/
-│       └── preset.json
-└── synths/
-    ├── oscillator/
-    │   └── preset.json                 # Basic oscillator preset template
-    ├── square-lead/
-    │   └── preset.json
-    └── pad/
-        └── preset.json
+├── Aspirin/
+│   ├── index.json                      # Aspirin library index
+│   ├── instruments/
+│   │   ├── piano/
+│   │   ├── guitar/
+│   │   └── ...
+│   └── percussion/
+│       └── ...
+├── GeneralUserGS/
+│   ├── index.json
+│   ├── instruments/
+│   └── percussion/
+├── JCLive/
+│   ├── index.json
+│   ├── instruments/
+│   └── percussion/
+├── Chaos/
+│   ├── index.json
+│   ├── instruments/
+│   └── percussion/
+└── _shared/                            # Cross-library presets (effects, synths)
+    ├── index.json                      # Shared preset index
+    ├── effects/
+    │   ├── reverb/
+    │   │   └── preset.json
+    │   ├── delay/
+    │   │   └── preset.json
+    │   └── chorus/
+    │       └── preset.json
+    └── synths/
+        ├── oscillator/
+        │   └── preset.json
+        ├── square-lead/
+        │   └── preset.json
+        └── pad/
+            └── preset.json
 ```
 
 #### 3.6.2 Folder Organization Principles
 
-- **Top level** divides by function: `instruments/`, `percussion/`, `effects/`, `synths/`
-- **Second level** (under `instruments/`) groups by **GM category**: piano, guitar, organ, strings, etc.
-- **Third level** is the individual preset folder: `{Library}_{InstrumentName}/`
+- **Top level** organized by **source library**: `FluidR3_GM/`, `Aspirin/`, `GeneralUserGS/`, etc.
+- **Each library folder** is self-contained with its own `index.json` and subdivides by function: `instruments/`, `percussion/`, `effects/`
+- **Under `instruments/`**, groups by **GM category**: `piano/`, `guitar/`, `organ/`, `strings/`, etc.
+- **Leaf level** is the individual preset folder: `{InstrumentName}/` (no library prefix needed since the library is the parent)
+- **`_shared/`** folder at the root holds cross-library presets (built-in effects, oscillator synths) that don't belong to any source library
 - **Each preset folder is self-contained**: `preset.json` + all referenced sample files in the same directory
 - **Sample files** are named descriptively: `zone_{NoteName}.wav` (e.g., `zone_C4.wav`), or by percussion sound name (e.g., `kick.wav`, `hihat_closed.wav`)
-- **No deep nesting** beyond 3 levels — keeps paths short for URL fetching
+- **No deep nesting** beyond 4 levels (library/type/category/preset) — keeps paths short for URL fetching
+- **Libraries are independently searchable** — user only downloads index files for libraries they select
 
-#### 3.6.3 Root Index (Auto-Generated)
+#### 3.6.3 Generic Index Format (Auto-Generated)
 
-The `index.json` at the repo root is the preset catalog/manifest. It is **auto-generated on every commit** via a pre-commit hook.
+All index files share a **single generic format**. An index contains an array of **entries**, where each entry is either a **preset reference** or a **link to another index** (sub-index). This means:
+- The root `index.json` links to per-library sub-indexes
+- Each library's `index.json` lists its presets (and could further subdivide)
+- Any index file can be used as an entry point — users aren't forced to go through root
+- The loader recursively resolves sub-indexes on demand
+
+##### Index Schema
+
+```typescript
+interface PresetIndex {
+  format: "songwalker-index";         // Identifies this as a SongWalker index
+  version: number;                     // Schema version (currently 1)
+  name: string;                        // Human-readable name for this index
+  description?: string;                // Optional description
+  entries: IndexEntry[];               // Array of entries (presets or sub-indexes)
+}
+
+// Each entry is either a preset reference or a link to another index
+type IndexEntry = PresetEntry | SubIndexEntry;
+
+interface PresetEntry {
+  type: "preset";                      // Discriminator
+  name: string;                        // Human-readable preset name
+  path: string;                        // Relative path to preset.json
+  category: PresetCategory;            // "synth" | "sampler" | "effect" | "composite"
+  tags: string[];                      // Searchable tags
+  gmProgram?: number;                  // GM program number (0-127)
+  zoneCount?: number;                  // Number of sample zones
+  keyRange?: { low: number; high: number };
+}
+
+interface SubIndexEntry {
+  type: "index";                       // Discriminator
+  name: string;                        // Library/collection name
+  path: string;                        // Relative path to sub-index.json
+  description?: string;                // What this sub-index contains
+  presetCount?: number;                // Approximate number of presets within
+}
+```
+
+##### Root Index (`index.json`)
+
+The root `index.json` links to each source library as a sub-index. It also includes the `_shared` built-in presets. Deliberately small (< 2 KB).
 
 ```json
 {
+  "format": "songwalker-index",
   "version": 1,
-  "generatedAt": "2026-02-15T00:00:00Z",
-  "presets": [
+  "name": "SongWalker Library",
+  "description": "Root index — select a source library to browse its presets",
+  "entries": [
     {
-      "id": "fluidr3-gm-acoustic-grand-piano",
-      "name": "Acoustic Grand Piano",
-      "path": "instruments/piano/FluidR3_GM_Acoustic_Grand_Piano/preset.json",
-      "category": "sampler",
-      "tags": ["melodic", "piano", "acoustic", "gm:0", "library:FluidR3_GM"],
-      "gmProgram": 0,
-      "sourceLibrary": "FluidR3_GM",
-      "zoneCount": 22,
-      "keyRange": { "low": 0, "high": 127 },
-      "tuningVerified": true
+      "type": "index",
+      "name": "FluidR3 GM",
+      "path": "FluidR3_GM/index.json",
+      "description": "FluidR3 General MIDI soundfont — comprehensive instrument set",
+      "presetCount": 189
     },
     {
-      "id": "fluidr3-gm-standard-kit",
-      "name": "Standard Drum Kit",
-      "path": "percussion/drum-kits/FluidR3_GM_Standard/preset.json",
-      "category": "composite",
-      "tags": ["percussion", "drum-kit", "standard", "gm-drums:0", "library:FluidR3_GM"],
-      "gmProgram": null,
-      "sourceLibrary": "FluidR3_GM",
-      "zoneCount": 47,
-      "keyRange": { "low": 35, "high": 81 },
-      "tuningVerified": false
+      "type": "index",
+      "name": "Aspirin",
+      "path": "Aspirin/index.json",
+      "description": "Aspirin SF2 soundfont",
+      "presetCount": 150
+    },
+    {
+      "type": "index",
+      "name": "GeneralUser GS",
+      "path": "GeneralUserGS/index.json",
+      "description": "GeneralUser GS soundfont — high-quality GM set",
+      "presetCount": 270
+    },
+    {
+      "type": "index",
+      "name": "JCLive",
+      "path": "JCLive/index.json",
+      "description": "JCLive SF2 soundfont",
+      "presetCount": 128
+    },
+    {
+      "type": "index",
+      "name": "Chaos",
+      "path": "Chaos/index.json",
+      "description": "Chaos SF2 soundfont",
+      "presetCount": 128
+    },
+    {
+      "type": "index",
+      "name": "Built-in",
+      "path": "_shared/index.json",
+      "description": "Built-in oscillator synths and effects (no samples)",
+      "presetCount": 8
     }
   ]
 }
 ```
 
+##### Library Index (`{Library}/index.json`)
+
+Each library has its own index listing presets directly. Fetched asynchronously only when the user selects that library or a song references it.
+
+```json
+{
+  "format": "songwalker-index",
+  "version": 1,
+  "name": "FluidR3 GM",
+  "description": "FluidR3 General MIDI soundfont — 128 instruments + percussion",
+  "entries": [
+    {
+      "type": "preset",
+      "name": "Acoustic Grand Piano",
+      "path": "instruments/piano/Acoustic_Grand_Piano/preset.json",
+      "category": "sampler",
+      "tags": ["melodic", "piano", "acoustic", "gm:0"],
+      "gmProgram": 0,
+      "zoneCount": 22,
+      "keyRange": { "low": 0, "high": 127 }
+    },
+    {
+      "type": "preset",
+      "name": "Standard Drum Kit",
+      "path": "percussion/drum-kits/Standard/preset.json",
+      "category": "composite",
+      "tags": ["percussion", "drum-kit", "standard", "gm-drums:0"],
+      "zoneCount": 47,
+      "keyRange": { "low": 35, "high": 81 }
+    }
+  ]
+}
+```
+
+**Note:** All paths in an index are **relative to the directory containing that index file**. When the loader fetches `FluidR3_GM/index.json` and finds a preset at path `instruments/piano/Acoustic_Grand_Piano/preset.json`, it resolves to `{baseUrl}/FluidR3_GM/instruments/piano/Acoustic_Grand_Piano/preset.json`.
+
+**Key design benefits:**
+- Any index file works as a standalone entry point (e.g., a user could point directly at `FluidR3_GM/index.json`)
+- Sub-indexes can nest arbitrarily (a library could subdivide into `instruments/index.json` and `percussion/index.json`)
+- Root index stays tiny — library indexes are only downloaded when selected
+- Users avoid downloading large indexes for libraries they don't need
+
 **Generation script (`scripts/generate-index.js`):**
-1. Recursively scan all `preset.json` files in the repo
-2. Read each preset's metadata, tags, zone info
-3. Collect into a single sorted array
-4. Write `index.json` to repo root
-5. Runs via `.husky/pre-commit` hook so the index is always in sync
+1. Scan top-level directories for library folders
+2. For each library folder, recursively scan all `preset.json` files
+3. Build preset entries with metadata, tags, zone info
+4. Write a per-library `{Library}/index.json` with `type: "preset"` entries
+5. Write the root `index.json` with `type: "index"` entries linking to each library
+6. Also generate `_shared/index.json` for built-in effects/synths
+7. Runs via `.husky/pre-commit` hook so all indexes stay in sync
 
 #### 3.6.4 Preset File Format (preset.json)
 
@@ -291,7 +421,7 @@ Each `preset.json` contains the full `PresetDescriptor` and references sample fi
 ```
 
 **Key rule:** Audio URLs in `preset.json` are **relative to the preset directory**. At runtime they resolve to:
-`https://raw.githubusercontent.com/clevertree/songwalker-library/main/instruments/piano/FluidR3_GM_Acoustic_Grand_Piano/zone_E1.wav`
+`https://raw.githubusercontent.com/clevertree/songwalker-library/main/FluidR3_GM/instruments/piano/Acoustic_Grand_Piano/zone_E1.wav`
 
 #### 3.6.5 Multi-Sample Instruments as Composite Presets
 
@@ -346,16 +476,20 @@ This approach means:
 
 | ID | Test | Expected |
 |----|------|----------|
-| L-1 | Pre-commit hook runs `generate-index.js` | `index.json` updated with all presets |
-| L-2 | Add a new preset folder, commit | New entry appears in `index.json` |
-| L-3 | Remove a preset folder, commit | Entry removed from `index.json` |
-| L-4 | `index.json` lists correct `path` for each preset | All paths resolve to valid `preset.json` |
+| L-1 | Pre-commit hook runs `generate-index.js` | Root + per-library `index.json` files updated |
+| L-2 | Add a new preset folder to a library, commit | New preset entry appears in that library's `index.json` |
+| L-3 | Remove a preset folder, commit | Entry removed from library `index.json`, root count updated |
+| L-4 | All index entries have correct relative `path` | Preset paths resolve to valid `preset.json`, index paths resolve to valid sub-indexes |
 | L-5 | All sample files referenced in `preset.json` exist | No broken relative paths |
-| L-6 | Fetch preset from GitHub raw URL | Returns valid JSON with correct structure |
+| L-6 | Fetch preset from GitHub raw URL | Returns valid JSON with `format: "songwalker-index"` |
 | L-7 | Fetch sample file from GitHub raw URL | Returns valid audio file |
-| L-8 | Folder hierarchy follows GM category grouping | All instruments in correct category folder |
-| L-9 | Drum kits in `percussion/drum-kits/` | Each has composite preset with per-note sampler children |
-| L-10 | Index file < 200 KB for full library | Efficient for network fetch at startup |
+| L-8 | Each library has `instruments/` and `percussion/` subfolders | GM category grouping within each library |
+| L-9 | Drum kits in `{Library}/percussion/drum-kits/` | Each has composite preset with per-note sampler children |
+| L-10 | Root index < 2 KB, per-library index < 200 KB | Efficient lazy loading |
+| L-11 | Sub-index entry `type: "index"` resolves to valid index | Loader can recursively traverse |
+| L-12 | Any index file works as standalone entry point | Loading `FluidR3_GM/index.json` directly returns presets without root |
+| L-13 | Index `format` field equals `"songwalker-index"` | All generated indexes include format identifier |
+| L-14 | Add a new library folder, commit | New `type: "index"` entry appears in root `index.json` |
 ---
 
 ## 4. Unified Preset Format
@@ -574,94 +708,95 @@ track.tuningPitch = 432;
 
 ### 5.2 Proposed Index Architecture
 
-The index is built from `index.json` fetched from https://github.com/clevertree/songwalker-library (raw URL).
+The architecture uses the generic index format (Section 3.6.3). At startup, only the root `index.json` is fetched (< 2 KB). Library sub-indexes are fetched on demand when the user selects a library or a song references a preset from it.
 
 ```
-PresetIndex (in-memory, built at startup from songwalker-library/index.json)
-├── CatalogEntries[]
-│   ├── id: string
-│   ├── name: string
-│   ├── path: string                                    // Relative path in repo
-│   ├── category: PresetCategory
-│   ├── tags: string[]
-│   ├── gmProgram?: number
-│   ├── sourceLibrary?: string
-│   ├── tuningVerified: boolean
-│   └── dataUrl: string (resolved GitHub raw URL to preset.json)
-├── SearchIndex
-│   ├── byName: HashMap<string, CatalogEntry[]>       // name → entries
-│   ├── byTag: HashMap<string, CatalogEntry[]>         // tag → entries
-│   ├── byGMProgram: HashMap<number, CatalogEntry[]>   // program → entries
-│   ├── byLibrary: HashMap<string, CatalogEntry[]>     // library → entries
-│   └── byTagPrefix: HashMap<string, CatalogEntry[]>   // e.g., "melodic" → all melodic
+PresetLoader (in-memory, lazy-loading)
+├── rootIndex: PresetIndex                              // Root index (fetched at startup)
+│   └── entries: SubIndexEntry[]                        // Links to per-library indexes
+├── loadedLibraries: Map<string, PresetIndex>            // Cached library indexes
+│   └── e.g. "FluidR3_GM" → { entries: PresetEntry[] }  // Fetched on demand
+├── enabledLibraries: Set<string>                        // User-selected libraries to search
+├── SearchIndex (built incrementally as libraries load)
+│   ├── byName: HashMap<string, PresetEntry[]>          // name → entries
+│   ├── byTag: HashMap<string, PresetEntry[]>           // tag → entries
+│   ├── byGMProgram: HashMap<number, PresetEntry[]>     // program → entries
+│   └── byLibrary: HashMap<string, PresetEntry[]>       // libraryId → entries
 └── Cache
-    ├── loadedPresets: HashMap<string, PresetDescriptor>  // id → full preset
-    └── decodedBuffers: HashMap<string, AudioBuffer>      // audio hash → decoded buffer
+    ├── loadedPresets: LRU<string, PresetDescriptor>     // path → full preset
+    └── decodedBuffers: LRU<string, AudioBuffer>         // audio hash → decoded buffer
 ```
 
 ### 5.3 Search Strategy
 
-1. **Manifest file**: `index.json` from `songwalker-library` repo (~50-200 KB) listing all preset metadata without audio data
-2. **In-memory index**: Built from `index.json` at startup, supports:
+1. **Root index**: `index.json` from `songwalker-library` repo (< 2 KB) — lists available libraries
+2. **Lazy library loading**: When a library is selected (or a song references it), fetch its `index.json` (~10-100 KB) asynchronously
+3. **In-memory search index**: Built incrementally as libraries are loaded. Supports:
    - Exact name match: O(1) HashMap lookup
-   - Regex match: O(n) over name index only (not audio data)
+   - Regex match: O(n) over loaded preset names only
    - Tag search: O(1) per tag (e.g., all `"melodic"` or all `"percussion"` presets)
    - GM program lookup: O(1)
    - Fuzzy match: Levenshtein distance over name index
-   - Tag prefix search: O(1) for `"library:FluidR3_GM"`, `"family:keyboard"`, etc.
-3. **Lazy audio loading**: Only fetch/decode audio data when a preset is actually used
-4. **LRU cache**: Keep recently used presets in memory, evict least-recently-used when memory pressure
-5. **Tag-based filtering**: Tags like `"melodic"` vs `"percussion"` enable fast category filtering without parsing preset contents
+   - Cross-library search: search across all enabled libraries simultaneously
+4. **Lazy audio loading**: Only fetch/decode audio data when a preset is actually used
+5. **LRU cache**: Keep recently used presets in memory, evict least-recently-used when memory pressure
+6. **Library isolation**: Users can enable/disable libraries to control search scope and avoid downloading large indexes they don't need
 
 ### 5.4 Loading Pipeline (Runtime)
 
-Since presets load during song playback (like function calls), the pipeline must be fast:
+Presets are preloaded at compile time (via `extract_preset_refs()`). The pipeline:
 
 ```
 loadPreset("FluidR3_GM/Acoustic Guitar")
-  ├─ 1. Index lookup in songwalker-library/index.json (< 1ms) → CatalogEntry
-  ├─ 2. Cache check → hit? Return cached preset
-  ├─ 3. Fetch preset.json from GitHub raw URL (~10-200ms)
-  ├─ 4. Parse & validate → PresetDescriptor
-  ├─ 5. Fetch & decode sample files (async, per-zone):
+  ├─ 1. Determine library from name prefix or search all enabled libraries
+  ├─ 2. If library not loaded, fetch {library}/index.json (~10-100ms)
+  ├─ 3. Search library index for preset entry (< 1ms)
+  ├─ 4. Cache check → hit? Return cached preset
+  ├─ 5. Fetch preset.json relative to library dir (~10-200ms)
+  ├─ 6. Parse & validate → PresetDescriptor
+  ├─ 7. Fetch & decode sample files (async, per-zone):
   │     ├─ Content-addressed cache check → skip if already decoded
   │     ├─ Fetch zone_XX.wav from same directory as preset.json
   │     ├─ Codec decode (WAV: ~5ms, MP3: async ~50ms)
   │     └─ Store decoded buffer in cache
-  └─ 6. Build InstrumentInstance → ready for note playback
+  └─ 8. Build InstrumentInstance → ready for note playback
 ```
 
 ### 5.5 Prefetch / Ahead-of-Time Strategy
 
-The compiler can statically analyze `loadPreset()` calls from song source code to prefetch:
+The compiler statically extracts `loadPreset()` references at compile time:
 
 ```
 Compile phase:
   1. Parse .sw source
-  2. Extract all loadPreset() calls and their arguments
-  3. Resolve to CatalogEntries where possible (exact string matches)
-  4. Begin fetching preset data in parallel before playback starts
+  2. extract_preset_refs() collects all loadPreset() arguments
+  3. For each preset ref, determine which library it belongs to
+  4. Fetch required library indexes in parallel
+  5. Resolve to preset entries, fetch preset.json + samples in parallel
+  6. All assets cached before playback starts
 
-Runtime phase:
-  5. When loadPreset() executes, check prefetch cache first
-  6. Fall back to runtime fetch if not prefetched (regex matches, dynamic args)
+Playback phase:
+  7. When engine encounters PresetRef event, preset is already cached
+  8. Fall back to runtime fetch if not prefetched (regex matches, dynamic args)
 ```
 
 ### 5.6 Test Cases: Search & Loading Performance
 
 | ID | Test | Target |
 |----|------|--------|
-| P-1 | Index build from manifest (1,395 instruments + 3,831 percussion) | < 50ms |
-| P-2 | Exact name lookup | < 1ms |
-| P-3 | Regex search across all preset names | < 10ms |
-| P-4 | Tag-based filter (e.g., all "piano" presets) | < 1ms |
-| P-5 | GM program lookup | < 1ms |
-| P-6 | Full preset load (fetch + parse + decode) cold | < 500ms |
-| P-7 | Cached preset reload | < 1ms |
-| P-8 | Concurrent loading of 5 presets (song startup) | < 1s total |
-| P-9 | Prefetch analysis from `.sw` source | < 10ms |
-| P-10 | LRU eviction under memory pressure | Maintains < 100 MB cache |
-| P-11 | Content-addressed dedup: same sample across libraries | Decoded only once |
+| P-1 | Root index fetch and parse | < 50ms |
+| P-2 | Single library index fetch and parse (~200 presets) | < 200ms |
+| P-3 | Exact name lookup in loaded library | < 1ms |
+| P-4 | Regex search across all loaded preset names | < 10ms |
+| P-5 | Tag-based filter (e.g., all "piano" presets) | < 1ms |
+| P-6 | GM program lookup | < 1ms |
+| P-7 | Full preset load (fetch + parse + decode) cold | < 500ms |
+| P-8 | Cached preset reload | < 1ms |
+| P-9 | Concurrent loading of 5 presets across 2 libraries | < 1s total |
+| P-10 | Prefetch analysis from `.sw` source | < 10ms |
+| P-11 | LRU eviction under memory pressure | Maintains < 100 MB cache |
+| P-12 | Content-addressed dedup: same sample across libraries | Decoded only once |
+| P-13 | Search with no libraries enabled | Returns empty results, no network |
 
 ---
 
@@ -756,29 +891,38 @@ The preset UI appears in the web editor (Monaco-based) when a user wants to inse
 ┌──────────────────────────────────────────────────────┐
 │ Preset Browser                              [×]      │
 │ ┌──────────────────────────────────────────────────┐ │
-│ │ 🔍 Search: [acoustic guitar________] [▾ All]    │ │
+│ │ Libraries: [✓ FluidR3] [✓ Built-in] [Aspirin]   │ │
+│ │            [GeneralUser] [JCLive] [Chaos]        │ │
+│ │ 🔍 Search: [acoustic guitar________]            │ │
 │ │   Filter: [Synth] [Sampler] [Effect] [Composite] │ │
 │ └──────────────────────────────────────────────────┘ │
 │                                                      │
 │ ┌─ Results ────────────────────┬─ Preview ─────────┐ │
-│ │ ▸ Piano (12 variants)       │                    │ │
-│ │   ├ FluidR3_GM: Grand Piano │ Name: Nylon Guitar │ │
-│ │   ├ Aspirin: Grand Piano    │ Library: FluidR3   │ │
-│ │   └ GeneralUser: Grand ...  │ GM#: 24            │ │
-│ │ ▸ Guitar (8 variants)       │ Zones: 14          │ │
-│ │   ├ FluidR3_GM: Nylon ◄──  │ Range: E2 - G#5    │ │
-│ │   ├ FluidR3_GM: Steel      │                    │ │
-│ │   └ ...                     │ [▶ Preview C4]     │ │
-│ │ ▸ Drum Kits (7)            │                    │ │
-│ │ ▸ Effects (5)               │ ┌─ Keyboard ─────┐ │ │
-│ │ ▸ Synths (4)                │ │ ░░█░░█░░░█░░█░ │ │ │
-│ │                             │ │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │ │ │
-│ │                             │ └────────────────┘ │ │
+│ │ ▾ FluidR3 GM (loading...)   │                    │ │
+│ │   ▸ Piano (3)               │ Name: Nylon Guitar │ │
+│ │     ├ Acoustic Grand Piano  │ Library: FluidR3   │ │
+│ │     ├ Bright Acoustic Piano │ GM#: 24            │ │
+│ │     └ Honky-Tonk Piano      │ Zones: 14          │ │
+│ │   ▸ Guitar (4)              │ Range: E2 - G#5    │ │
+│ │     ├ Nylon Guitar ◄──      │                    │ │
+│ │     ├ Steel Guitar           │ [▶ Preview C4]     │ │
+│ │     └ ...                   │                    │ │
+│ │   ▸ Drum Kits (5)           │ ┌─ Keyboard ─────┐ │ │
+│ │ ▸ Built-in                  │ │ ░░█░░█░░░█░░█░ │ │ │
+│ │   ├ Oscillator              │ │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │ │ │
+│ │   ├ Reverb                  │ └────────────────┘ │ │
+│ │   └ Delay                   │                    │ │
 │ └─────────────────────────────┴────────────────────┘ │
 │                                                      │
 │ [Insert as loadPreset()]  [Insert as Constructor]    │
 └──────────────────────────────────────────────────────┘
 ```
+
+**Library selection:**
+- Toggle chips at the top to enable/disable source libraries
+- Only enabled libraries are fetched and searched
+- Library indexes load asynchronously when first enabled
+- "Built-in" (effects + oscillators) is always enabled by default
 
 **Trigger points:**
 - Typing `loadPreset(` → autocomplete opens browser
@@ -789,8 +933,9 @@ The preset UI appears in the web editor (Monaco-based) when a user wants to inse
 **Search features:**
 - Real-time fuzzy search over preset names, tags, GM categories
 - Filter toggles by category (synth/sampler/effect/composite)
-- Library filter dropdown
+- Search scoped to enabled libraries only
 - GM program number search (e.g., "gm:24" for Nylon Guitar)
+- Results grouped by library, then by GM category
 
 #### 8.2.2 Preset Editor (Hierarchy View)
 
@@ -1142,14 +1287,15 @@ main(layered);
 
 ### Phase 1: Library Repository Setup
 - [ ] Create `songwalker-library` repo at https://github.com/clevertree/songwalker-library
-- [ ] Set up folder structure: `instruments/`, `percussion/`, `effects/`, `synths/`
-- [ ] Build conversion script: webaudiofontdata JSON → unified preset format
+- [ ] Set up per-library folder structure: `{Library}/instruments/`, `{Library}/percussion/`
+- [ ] Build conversion script: webaudiofontdata JSON → per-library preset format
 - [ ] Extract sample audio files (base64 → WAV), deduplicate with SHA256
-- [ ] Organize into GM category folders with descriptive names
+- [ ] Organize by source library first, then GM category within each library
 - [ ] Generate `preset.json` for each instrument (with relative sample paths)
-- [ ] Build `scripts/generate-index.js` for root `index.json` generation
+- [ ] Build `scripts/generate-index.js` for generic index generation (root + per-library)
 - [ ] Set up Husky pre-commit hook for auto-index generation
-- [ ] Assign tags using heuristics (melodic/percussion, GM category, library source)
+- [ ] Assign tags using heuristics (melodic/percussion, GM category)
+- [ ] Create `_shared/` folder with built-in oscillator synths and effects
 
 ### Phase 2: Foundation
 - [ ] Add `tuningPitch` to track state (Rust engine + song format)
@@ -1158,12 +1304,15 @@ main(layered);
 - [ ] Multi-sampler composite preset format for multi-zone instruments
 
 ### Phase 3: Preset Index & Search
-- [ ] Fetch `index.json` from `songwalker-library` repo at startup
-- [ ] Implement in-memory search index (HashMap-based) with tag support
-- [ ] Implement `loadPreset()` with index lookup → lazy fetch → decode → cache
+- [ ] Fetch root `index.json` from `songwalker-library` repo at startup (< 2 KB)
+- [ ] Lazy-load per-library indexes on demand when user enables a library
+- [ ] Generic index loader: parse `PresetIndex`, resolve `type: "index"` vs `type: "preset"` entries
+- [ ] Build in-memory search index incrementally as libraries load
+- [ ] Implement `loadPreset()` with library resolution → index lookup → lazy fetch → decode → cache
 - [ ] LRU cache for decoded audio buffers
-- [ ] Static analysis prefetching from `.sw` source
+- [ ] Static analysis prefetching from `.sw` source (extract_preset_refs)
 - [ ] Tag-based filtering (melodic vs percussion, instrument family, etc.)
+- [ ] Library enable/disable controls in the UI
 
 ### Phase 4: Sampler Engine (Rust DSP)
 - [ ] Implement sampler/AudioBuffer player in Rust (pitch-shifting via resampling)

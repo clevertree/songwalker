@@ -2,14 +2,15 @@
  * Preset Browser UI — searchable panel for browsing the preset library.
  *
  * Creates a collapsible sidebar panel with:
+ * - Library selector chips (enable/disable source libraries)
  * - Search input with fuzzy matching
  * - Category/tag filter chips
- * - Scrollable preset list with metadata
+ * - Scrollable preset list grouped by library
  * - Click-to-insert into editor
  */
 
-import type { CatalogEntry, PresetCategory } from './preset-types.js';
-import { PresetLoader } from './preset-loader.js';
+import type { PresetEntry, PresetCategory } from './preset-types.js';
+import { PresetLoader, type LibraryInfo } from './preset-loader.js';
 
 // ── Category Colours ─────────────────────────────────────
 
@@ -25,16 +26,17 @@ const CATEGORY_COLOURS: Record<PresetCategory, string> = {
 export class PresetBrowser {
     private container: HTMLElement;
     private loader: PresetLoader;
-    private entries: CatalogEntry[] = [];
-    private filteredEntries: CatalogEntry[] = [];
-    private onSelect: ((entry: CatalogEntry) => void) | null = null;
+    private filteredEntries: PresetEntry[] = [];
+    private onSelect: ((entry: PresetEntry) => void) | null = null;
 
     private searchInput!: HTMLInputElement;
     private listEl!: HTMLElement;
     private statusEl!: HTMLElement;
+    private libraryChipsEl!: HTMLElement;
     private categoryFilter: PresetCategory | null = null;
 
     private isOpen = false;
+    private libraries: LibraryInfo[] = [];
 
     constructor(parentEl: HTMLElement, loader: PresetLoader) {
         this.container = document.createElement('div');
@@ -47,13 +49,14 @@ export class PresetBrowser {
         this.searchInput = this.container.querySelector('.pb-search')!;
         this.listEl = this.container.querySelector('.pb-list')!;
         this.statusEl = this.container.querySelector('.pb-status')!;
+        this.libraryChipsEl = this.container.querySelector('.pb-libraries')!;
 
         this.bindEvents();
         this.applyStyles();
     }
 
     /** Register a callback for when a preset entry is selected. */
-    onPresetSelect(cb: (entry: CatalogEntry) => void): void {
+    onPresetSelect(cb: (entry: PresetEntry) => void): void {
         this.onSelect = cb;
     }
 
@@ -61,8 +64,8 @@ export class PresetBrowser {
     toggle(): void {
         this.isOpen = !this.isOpen;
         this.container.classList.toggle('open', this.isOpen);
-        if (this.isOpen && this.entries.length === 0) {
-            this.loadEntries();
+        if (this.isOpen && this.libraries.length === 0) {
+            this.loadRootIndex();
         }
     }
 
@@ -78,16 +81,75 @@ export class PresetBrowser {
 
     // ── Internal ─────────────────────────────────────────
 
-    private async loadEntries(): Promise<void> {
+    private async loadRootIndex(): Promise<void> {
         this.statusEl.textContent = 'Loading index…';
         try {
-            const index = await this.loader.loadIndex();
-            this.entries = index.entries;
-            this.statusEl.textContent = `${this.entries.length} presets`;
-            this.applyFilter();
+            await this.loader.loadRootIndex();
+            this.libraries = this.loader.getAvailableLibraries();
+            this.renderLibraryChips();
+            this.statusEl.textContent = `${this.libraries.length} libraries available`;
+
+            // Auto-enable the first library (or Built-in if present)
+            const builtIn = this.libraries.find(l => l.name === 'Built-in');
+            if (builtIn) {
+                await this.toggleLibrary(builtIn.name, true);
+            } else if (this.libraries.length > 0) {
+                await this.toggleLibrary(this.libraries[0].name, true);
+            }
         } catch (err) {
             this.statusEl.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
+    }
+
+    private renderLibraryChips(): void {
+        const fragment = document.createDocumentFragment();
+
+        for (const lib of this.libraries) {
+            const chip = document.createElement('span');
+            chip.className = `pb-lib-chip${lib.enabled ? ' active' : ''}`;
+            chip.dataset.library = lib.name;
+            chip.title = lib.description ?? lib.name;
+
+            const label = lib.name;
+            const count = lib.presetCount ? ` (${lib.presetCount})` : '';
+            chip.textContent = `${label}${count}`;
+
+            chip.addEventListener('click', () => this.toggleLibrary(lib.name));
+            fragment.appendChild(chip);
+        }
+
+        this.libraryChipsEl.replaceChildren(fragment);
+    }
+
+    private async toggleLibrary(name: string, forceEnable?: boolean): Promise<void> {
+        const lib = this.libraries.find(l => l.name === name);
+        if (!lib) return;
+
+        const shouldEnable = forceEnable ?? !lib.enabled;
+
+        if (shouldEnable) {
+            // Show loading state on the chip
+            const chip = this.libraryChipsEl.querySelector(
+                `[data-library="${name}"]`
+            ) as HTMLElement | null;
+            if (chip) chip.textContent = `${name} ⏳`;
+
+            try {
+                await this.loader.enableLibrary(name);
+                lib.enabled = true;
+                lib.loaded = true;
+            } catch (err) {
+                console.warn(`Failed to load library "${name}":`, err);
+                if (chip) chip.textContent = `${name} ✗`;
+                return;
+            }
+        } else {
+            this.loader.disableLibrary(name);
+            lib.enabled = false;
+        }
+
+        this.renderLibraryChips();
+        this.applyFilter();
     }
 
     private applyFilter(): void {
@@ -96,7 +158,7 @@ export class PresetBrowser {
         if (query) {
             this.filteredEntries = this.loader.fuzzySearch(query, 100);
         } else {
-            this.filteredEntries = [...this.entries];
+            this.filteredEntries = this.loader.search({});
         }
 
         if (this.categoryFilter) {
@@ -168,6 +230,7 @@ export class PresetBrowser {
                 <span class="pb-title">Presets</span>
                 <button class="pb-close" title="Close">&times;</button>
             </div>
+            <div class="pb-libraries"></div>
             <input class="pb-search" type="text" placeholder="Search presets…" />
             <div class="pb-filters">
                 <span class="pb-chip active" data-category="all">All</span>
@@ -223,6 +286,32 @@ export class PresetBrowser {
     font-size: 1.2rem;
     padding: 0 4px;
     line-height: 1;
+}
+.pb-libraries {
+    display: flex;
+    gap: 4px;
+    padding: 0.5rem 0.75rem 0.25rem;
+    flex-wrap: wrap;
+}
+.pb-lib-chip {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    background: var(--overlay, #11111b);
+    border: 1px solid var(--border, #313244);
+    color: var(--subtext, #a6adc8);
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+}
+.pb-lib-chip.active {
+    background: #45475a;
+    color: var(--text, #cdd6f4);
+    border-color: var(--accent, #89b4fa);
+    font-weight: 600;
+}
+.pb-lib-chip:hover {
+    border-color: var(--accent, #89b4fa);
 }
 .pb-search {
     margin: 0.5rem 0.75rem;

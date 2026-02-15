@@ -107,21 +107,50 @@ export interface ADSRConfig {
     release: number;
 }
 
-// ── Library Index / Catalog ──────────────────────────────
+// ── Generic Index ────────────────────────────────────────
 
-export interface LibraryIndex {
-    format: string;        // "songwalker-library-index"
-    version: number;
-    generatedAt: string;
-    entries: CatalogEntry[];
+/**
+ * A generic index file that can contain preset references and/or
+ * links to other indexes (sub-indexes). Any index file can serve
+ * as a standalone entry point.
+ */
+export interface PresetIndex {
+    format: 'songwalker-index';
+    version: number;           // Currently 1
+    name: string;              // Human-readable name
+    description?: string;
+    entries: IndexEntry[];
 }
 
-export interface CatalogEntry {
+/**
+ * Each entry is either a preset reference or a link to another index.
+ * Discriminated union on `type`.
+ */
+export type IndexEntry = PresetEntry | SubIndexEntry;
+
+/** A reference to a preset.json file */
+export interface PresetEntry {
+    type: 'preset';
     name: string;
+    path: string;              // Relative path to preset.json
     category: PresetCategory;
     tags: string[];
-    path: string;          // relative path to preset.json
     gmProgram?: number;
     zoneCount?: number;
     keyRange?: KeyRange;
 }
+
+/** A link to another index file (e.g., a source library) */
+export interface SubIndexEntry {
+    type: 'index';
+    name: string;
+    path: string;              // Relative path to sub-index.json
+    description?: string;
+    presetCount?: number;
+}
+
+// ── Legacy compat alias (to be removed) ──────────────────
+/** @deprecated Use PresetIndex */
+export type LibraryIndex = PresetIndex;
+/** @deprecated Use PresetEntry */
+export type CatalogEntry = PresetEntry;

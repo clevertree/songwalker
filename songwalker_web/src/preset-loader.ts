@@ -1,16 +1,23 @@
 /**
  * Preset loading system — fetches, decodes, and caches preset descriptors.
  *
+ * Supports the generic index format: a single format that can contain
+ * preset entries and/or links to sub-indexes. The root index is tiny
+ * (< 2 KB) and links to per-library sub-indexes which are fetched lazily.
+ *
  * Usage:
  *   const loader = new PresetLoader('https://cdn.example.com/songwalker-library');
- *   await loader.loadIndex();
+ *   await loader.loadRootIndex();
+ *   await loader.enableLibrary('FluidR3_GM');
  *   const preset = await loader.loadPreset('Acoustic Grand Piano');
  */
 
 import type {
     PresetDescriptor,
-    LibraryIndex,
-    CatalogEntry,
+    PresetIndex,
+    IndexEntry,
+    PresetEntry,
+    SubIndexEntry,
     SamplerConfig,
     SampleZone,
     AudioReference,
@@ -29,6 +36,17 @@ export interface SearchOptions {
     category?: PresetCategory;
     tags?: string[];
     gmProgram?: number;
+    library?: string;
+}
+
+/** Info about a loadable library (from root index sub-index entries) */
+export interface LibraryInfo {
+    name: string;
+    path: string;
+    description?: string;
+    presetCount?: number;
+    loaded: boolean;
+    enabled: boolean;
 }
 
 // ── LRU Cache ────────────────────────────────────────────
@@ -73,11 +91,35 @@ class LRUCache<K, V> {
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────
+
+/** Resolve a relative path against a parent URL directory. */
+function resolveUrl(base: string, relativePath: string): string {
+    // Strip trailing filename from base to get directory
+    const baseDir = base.replace(/\/[^/]*$/, '');
+    return `${baseDir}/${relativePath}`;
+}
+
+/** Extract directory from a URL path. */
+function dirOf(url: string): string {
+    return url.replace(/\/[^/]*$/, '');
+}
+
 // ── Preset Loader ────────────────────────────────────────
 
 export class PresetLoader {
     private baseUrl: string;
-    private index: LibraryIndex | null = null;
+    private rootIndex: PresetIndex | null = null;
+
+    /** Loaded library indexes keyed by library name */
+    private loadedLibraries = new Map<string, { index: PresetIndex; baseUrl: string }>();
+
+    /** Which libraries are enabled for search */
+    private enabledLibraries = new Set<string>();
+
+    /** In-flight library loads (dedup concurrent requests) */
+    private loadingLibraries = new Map<string, Promise<PresetIndex>>();
+
     private presetCache: LRUCache<string, PresetDescriptor>;
     private audioCache: LRUCache<string, AudioBuffer>;
     private audioContext: AudioContext | null = null;
@@ -93,77 +135,200 @@ export class PresetLoader {
         this.audioContext = ctx;
     }
 
-    // ── Index ────────────────────────────────────────────
+    // ── Root Index ───────────────────────────────────────
 
-    /** Fetch and cache the library index. */
-    async loadIndex(): Promise<LibraryIndex> {
-        if (this.index) return this.index;
+    /** Fetch and cache the root index. */
+    async loadRootIndex(): Promise<PresetIndex> {
+        if (this.rootIndex) return this.rootIndex;
 
         const url = `${this.baseUrl}/index.json`;
         const resp = await fetch(url);
         if (!resp.ok) {
-            throw new Error(`Failed to fetch library index: ${resp.status} ${resp.statusText}`);
+            throw new Error(`Failed to fetch root index: ${resp.status} ${resp.statusText}`);
         }
-        this.index = await resp.json() as LibraryIndex;
-        return this.index;
+        this.rootIndex = await resp.json() as PresetIndex;
+
+        // Auto-enable any inline preset entries from root (e.g., shared presets)
+        const presetEntries = this.rootIndex.entries.filter(
+            (e): e is PresetEntry => e.type === 'preset'
+        );
+        if (presetEntries.length > 0) {
+            // Store root presets as a synthetic library
+            this.loadedLibraries.set('_root', {
+                index: this.rootIndex,
+                baseUrl: this.baseUrl,
+            });
+            this.enabledLibraries.add('_root');
+        }
+
+        return this.rootIndex;
     }
 
-    /** Get the loaded index (throws if not yet loaded). */
-    getIndex(): LibraryIndex {
-        if (!this.index) {
-            throw new Error('Index not loaded. Call loadIndex() first.');
+    /**
+     * Load the root index. Alias for loadRootIndex() for compatibility.
+     * @deprecated Use loadRootIndex() instead.
+     */
+    async loadIndex(): Promise<PresetIndex> {
+        return this.loadRootIndex();
+    }
+
+    /** Get the loaded root index (throws if not yet loaded). */
+    getRootIndex(): PresetIndex {
+        if (!this.rootIndex) {
+            throw new Error('Root index not loaded. Call loadRootIndex() first.');
         }
-        return this.index;
+        return this.rootIndex;
+    }
+
+    /**
+     * Get the loaded root index. Alias for getRootIndex() for compatibility.
+     * @deprecated Use getRootIndex() instead.
+     */
+    getIndex(): PresetIndex {
+        return this.getRootIndex();
+    }
+
+    // ── Library Management ───────────────────────────────
+
+    /** Get info about all available libraries from the root index. */
+    getAvailableLibraries(): LibraryInfo[] {
+        const root = this.getRootIndex();
+        return root.entries
+            .filter((e): e is SubIndexEntry => e.type === 'index')
+            .map(entry => ({
+                name: entry.name,
+                path: entry.path,
+                description: entry.description,
+                presetCount: entry.presetCount,
+                loaded: this.loadedLibraries.has(entry.name),
+                enabled: this.enabledLibraries.has(entry.name),
+            }));
+    }
+
+    /** Fetch a library's sub-index and add it to the loaded set. */
+    async loadLibrary(libraryName: string): Promise<PresetIndex> {
+        // Already loaded?
+        const existing = this.loadedLibraries.get(libraryName);
+        if (existing) return existing.index;
+
+        // Already in flight?
+        const inflight = this.loadingLibraries.get(libraryName);
+        if (inflight) return inflight;
+
+        const root = this.getRootIndex();
+        const entry = root.entries.find(
+            (e): e is SubIndexEntry => e.type === 'index' && e.name === libraryName
+        );
+        if (!entry) {
+            throw new Error(`Library not found in root index: "${libraryName}"`);
+        }
+
+        const promise = this._fetchIndex(entry.path, this.baseUrl).then(result => {
+            this.loadedLibraries.set(libraryName, result);
+            this.loadingLibraries.delete(libraryName);
+            return result.index;
+        });
+
+        this.loadingLibraries.set(libraryName, promise);
+        return promise;
+    }
+
+    /** Enable a library for searching. Loads it if not already loaded. */
+    async enableLibrary(libraryName: string): Promise<void> {
+        if (!this.loadedLibraries.has(libraryName)) {
+            await this.loadLibrary(libraryName);
+        }
+        this.enabledLibraries.add(libraryName);
+    }
+
+    /** Disable a library from search results (keeps it cached). */
+    disableLibrary(libraryName: string): void {
+        this.enabledLibraries.delete(libraryName);
+    }
+
+    /** Check if a library is enabled. */
+    isLibraryEnabled(libraryName: string): boolean {
+        return this.enabledLibraries.has(libraryName);
+    }
+
+    /** Check if a library's index has been loaded. */
+    isLibraryLoaded(libraryName: string): boolean {
+        return this.loadedLibraries.has(libraryName);
+    }
+
+    /** Fetch and parse an index file relative to a base URL. */
+    private async _fetchIndex(relativePath: string, parentBaseUrl: string): Promise<{ index: PresetIndex; baseUrl: string }> {
+        const url = `${parentBaseUrl}/${relativePath}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`Failed to fetch index: ${resp.status} ${url}`);
+        }
+        const index = await resp.json() as PresetIndex;
+        return { index, baseUrl: dirOf(url) };
     }
 
     // ── Search ───────────────────────────────────────────
 
-    /** Search the catalog for entries matching the given criteria. */
-    search(options: SearchOptions): CatalogEntry[] {
-        const idx = this.getIndex();
-        let results = idx.entries;
+    /** Get all preset entries from enabled libraries. */
+    private _getEnabledPresets(): Array<{ entry: PresetEntry; libraryName: string; libraryBaseUrl: string }> {
+        const results: Array<{ entry: PresetEntry; libraryName: string; libraryBaseUrl: string }> = [];
 
-        if (options.category) {
-            results = results.filter(e => e.category === options.category);
-        }
-        if (options.gmProgram !== undefined) {
-            results = results.filter(e => e.gmProgram === options.gmProgram);
-        }
-        if (options.tags && options.tags.length > 0) {
-            const searchTags = new Set(options.tags.map(t => t.toLowerCase()));
-            results = results.filter(e =>
-                e.tags.some(t => searchTags.has(t.toLowerCase()))
-            );
-        }
-        if (options.name) {
-            const needle = options.name.toLowerCase();
-            results = results.filter(e =>
-                e.name.toLowerCase().includes(needle)
-            );
+        for (const [libraryName, { index, baseUrl }] of this.loadedLibraries) {
+            if (!this.enabledLibraries.has(libraryName)) continue;
+
+            for (const entry of index.entries) {
+                if (entry.type === 'preset') {
+                    results.push({ entry, libraryName, libraryBaseUrl: baseUrl });
+                }
+            }
         }
 
         return results;
     }
 
-    /** Fuzzy search by name — returns results sorted by relevance. */
-    fuzzySearch(query: string, limit = 20): CatalogEntry[] {
-        const idx = this.getIndex();
-        const needle = query.toLowerCase();
+    /** Search all enabled libraries for entries matching the given criteria. */
+    search(options: SearchOptions): PresetEntry[] {
+        let results = this._getEnabledPresets();
 
-        const scored = idx.entries
-            .map(entry => {
+        if (options.library) {
+            results = results.filter(r => r.libraryName === options.library);
+        }
+        if (options.category) {
+            results = results.filter(r => r.entry.category === options.category);
+        }
+        if (options.gmProgram !== undefined) {
+            results = results.filter(r => r.entry.gmProgram === options.gmProgram);
+        }
+        if (options.tags && options.tags.length > 0) {
+            const searchTags = new Set(options.tags.map(t => t.toLowerCase()));
+            results = results.filter(r =>
+                r.entry.tags.some(t => searchTags.has(t.toLowerCase()))
+            );
+        }
+        if (options.name) {
+            const needle = options.name.toLowerCase();
+            results = results.filter(r =>
+                r.entry.name.toLowerCase().includes(needle)
+            );
+        }
+
+        return results.map(r => r.entry);
+    }
+
+    /** Fuzzy search by name across all enabled libraries — sorted by relevance. */
+    fuzzySearch(query: string, limit = 20): PresetEntry[] {
+        const needle = query.toLowerCase();
+        const allPresets = this._getEnabledPresets();
+
+        const scored = allPresets
+            .map(({ entry }) => {
                 const name = entry.name.toLowerCase();
                 let score = 0;
 
-                // Exact match
                 if (name === needle) score = 100;
-                // Starts with
                 else if (name.startsWith(needle)) score = 80;
-                // Contains
                 else if (name.includes(needle)) score = 60;
-                // Tags match
                 else if (entry.tags.some(t => t.toLowerCase().includes(needle))) score = 40;
-                // Individual words match
                 else {
                     const words = needle.split(/\s+/);
                     const matchCount = words.filter(w =>
@@ -184,38 +349,94 @@ export class PresetLoader {
 
     // ── Load Preset ──────────────────────────────────────
 
-    /** Load a preset by name (first match from index). */
+    /**
+     * Load a preset by name. Searches all enabled libraries.
+     * If the name contains a '/' prefix (e.g., "FluidR3_GM/Acoustic Grand Piano"),
+     * the library is loaded automatically if needed.
+     */
     async loadPreset(name: string): Promise<PresetDescriptor> {
+        // Check for library prefix: "LibraryName/PresetName"
+        const slashIdx = name.indexOf('/');
+        if (slashIdx > 0) {
+            const libName = name.substring(0, slashIdx);
+            const presetName = name.substring(slashIdx + 1);
+
+            // Ensure library is loaded and enabled
+            if (!this.enabledLibraries.has(libName)) {
+                await this.enableLibrary(libName);
+            }
+
+            const results = this.search({ name: presetName, library: libName });
+            if (results.length > 0) {
+                return this._loadPresetEntry(results[0], libName);
+            }
+        }
+
+        // Fall back to searching all enabled libraries
         const results = this.search({ name });
         if (results.length === 0) {
             throw new Error(`Preset not found: "${name}"`);
         }
-        return this.loadPresetByPath(results[0].path);
+        return this._loadPresetEntry(results[0]);
     }
 
-    /** Load a preset by its catalog path. */
-    async loadPresetByPath(path: string): Promise<PresetDescriptor> {
-        if (this.presetCache.has(path)) {
-            return this.presetCache.get(path)!;
-        }
-
-        const url = `${this.baseUrl}/${path}`;
-        const resp = await fetch(url);
-        if (!resp.ok) {
-            throw new Error(`Failed to fetch preset: ${resp.status} ${url}`);
-        }
-        const preset = await resp.json() as PresetDescriptor;
-        this.presetCache.set(path, preset);
-        return preset;
+    /** Load a preset by its catalog path, resolved relative to a library. */
+    async loadPresetByPath(path: string, libraryName?: string): Promise<PresetDescriptor> {
+        const fullUrl = this._resolvePresetUrl(path, libraryName);
+        return this._fetchPreset(fullUrl, path);
     }
 
-    /** Load a preset by GM program number (0-127). */
+    /** Load a preset by GM program number (0-127). Searches enabled libraries. */
     async loadPresetByProgram(program: number): Promise<PresetDescriptor> {
         const results = this.search({ gmProgram: program });
         if (results.length === 0) {
             throw new Error(`No preset found for GM program ${program}`);
         }
-        return this.loadPresetByPath(results[0].path);
+        return this._loadPresetEntry(results[0]);
+    }
+
+    /** Internal: load a preset entry, resolving its URL from its source library. */
+    private async _loadPresetEntry(entry: PresetEntry, libraryHint?: string): Promise<PresetDescriptor> {
+        // Find which library this entry belongs to
+        const libraryName = libraryHint ?? this._findLibraryForEntry(entry);
+        const fullUrl = this._resolvePresetUrl(entry.path, libraryName);
+        return this._fetchPreset(fullUrl, entry.path);
+    }
+
+    /** Find which loaded library contains a given entry. */
+    private _findLibraryForEntry(entry: PresetEntry): string | undefined {
+        for (const [libraryName, { index }] of this.loadedLibraries) {
+            if (index.entries.some(e => e === entry)) {
+                return libraryName;
+            }
+        }
+        return undefined;
+    }
+
+    /** Resolve a preset path to a full URL using the library's base URL. */
+    private _resolvePresetUrl(path: string, libraryName?: string): string {
+        if (libraryName) {
+            const lib = this.loadedLibraries.get(libraryName);
+            if (lib) {
+                return `${lib.baseUrl}/${path}`;
+            }
+        }
+        return `${this.baseUrl}/${path}`;
+    }
+
+    /** Fetch and cache a preset descriptor. */
+    private async _fetchPreset(url: string, cacheKey: string): Promise<PresetDescriptor> {
+        if (this.presetCache.has(cacheKey)) {
+            return this.presetCache.get(cacheKey)!;
+        }
+
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`Failed to fetch preset: ${resp.status} ${url}`);
+        }
+        const preset = await resp.json() as PresetDescriptor;
+        this.presetCache.set(cacheKey, preset);
+        return preset;
     }
 
     // ── Audio Decoding ───────────────────────────────────
@@ -224,7 +445,7 @@ export class PresetLoader {
      * Decode an audio reference to an AudioBuffer.
      * Requires an AudioContext to be set via setAudioContext().
      */
-    async decodeAudio(ref_: AudioReference, presetPath?: string): Promise<AudioBuffer> {
+    async decodeAudio(ref_: AudioReference, presetUrl?: string): Promise<AudioBuffer> {
         const ctx = this.audioContext;
         if (!ctx) {
             throw new Error('AudioContext not set. Call setAudioContext() first.');
@@ -235,8 +456,8 @@ export class PresetLoader {
 
         switch (ref_.type) {
             case 'external': {
-                const sampleUrl = presetPath
-                    ? `${this.baseUrl}/${presetPath.replace(/\/[^/]+$/, '')}/${ref_.path}`
+                const sampleUrl = presetUrl
+                    ? `${dirOf(presetUrl)}/${ref_.path}`
                     : `${this.baseUrl}/${ref_.path}`;
                 cacheKey = ref_.sha256 ?? sampleUrl;
 
@@ -305,12 +526,12 @@ export class PresetLoader {
      */
     async decodeSamplerZones(
         config: SamplerConfig,
-        presetPath?: string,
+        presetUrl?: string,
     ): Promise<Map<SampleZone, AudioBuffer>> {
         const result = new Map<SampleZone, AudioBuffer>();
 
         const promises = config.zones.map(async (zone) => {
-            const buffer = await this.decodeAudio(zone.audio, presetPath);
+            const buffer = await this.decodeAudio(zone.audio, presetUrl);
             result.set(zone, buffer);
         });
 
@@ -345,9 +566,25 @@ export class PresetLoader {
      *   // Now playback can start without blocking on network fetches.
      */
     async preloadAll(presetNames: string[]): Promise<void> {
-        // Ensure index is loaded first
-        await this.loadIndex();
+        // Ensure root index is loaded first
+        await this.loadRootIndex();
 
+        // Determine which libraries need loading based on presetNames
+        // Names of form "LibraryName/PresetName" tell us which libraries to fetch
+        const librariesToLoad = new Set<string>();
+        for (const name of presetNames) {
+            const slashIdx = name.indexOf('/');
+            if (slashIdx > 0) {
+                librariesToLoad.add(name.substring(0, slashIdx));
+            }
+        }
+
+        // Load required libraries in parallel
+        await Promise.all(
+            Array.from(librariesToLoad).map(lib => this.enableLibrary(lib))
+        );
+
+        // Now load each preset
         const promises = presetNames.map(async (name) => {
             try {
                 const preset = await this.loadPreset(name);
@@ -355,9 +592,11 @@ export class PresetLoader {
                 if (preset.node?.type === 'sampler' && preset.node.config) {
                     const entry = this.search({ name })[0];
                     if (entry) {
+                        const libraryName = this._findLibraryForEntry(entry);
+                        const presetUrl = this._resolvePresetUrl(entry.path, libraryName);
                         await this.decodeSamplerZones(
                             preset.node.config as SamplerConfig,
-                            entry.path,
+                            presetUrl,
                         );
                     }
                 }
