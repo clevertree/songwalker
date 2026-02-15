@@ -17,12 +17,14 @@ export interface PresetDescriptor {
     tags: string[];
     metadata?: PresetMetadata;
     tuning?: TuningInfo;
+    maxVoices?: number;        // Per-preset voice limit (default: 64)
     node: PresetNode;
 }
 
 export interface PresetMetadata {
     description?: string;
     author?: string;
+    license?: string;
     license?: string;
     gmProgram?: number;
     gmCategory?: string;

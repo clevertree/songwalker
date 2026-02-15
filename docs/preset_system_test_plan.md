@@ -1354,15 +1354,46 @@ main(layered);
 
 ---
 
-## 11. Open Questions
+## 11. Resolved Design Decisions
 
-1. **Audio format for Rust DSP**: Should the unified format store raw PCM (fast decode, large files) or compressed (small files, async decode)? The Rust engine needs raw samples — decode on first load and cache?
-2. **Streaming vs. pre-render**: Current Rust engine pre-renders the entire song. Preset loading during playback requires either streaming render or a two-pass approach (analyze presets → prefetch → render).
-3. **Voice stealing**: Current max 64 voices with silent drop. Composite/layered presets multiply voice count. Need a voice-stealing policy (oldest? quietest?).
-4. **Velocity layers**: Current sample libraries have no velocity layers. Should the format support them for future sample sets?
-5. **User preset storage**: Where should user-created composite presets be stored? LocalStorage? IndexedDB? File system? PR to `songwalker-library`?
-6. **Sample licensing**: Different SF2 sources have different licenses. Should the manifest track license per-sample for legal clarity?
-7. **GitHub raw URL rate limits**: For high-traffic front page, should we use a CDN or GitHub Pages for serving `songwalker-library` assets? Consider GitHub Pages (`clevertree.github.io/songwalker-library/`) or a dedicated CDN.
-8. **Tuner accuracy threshold**: What cents threshold constitutes "needs adjustment"? Proposed: 10 cents. Should this be configurable?
-9. **Large repo size**: With all sample WAVs, the repo could be several GB. Should we use Git LFS for audio files? Or keep only compressed formats (MP3/OGG) in the repo?
-10. **Tag governance**: Who maintains the tag vocabulary? Should there be a schema file defining valid tags, or are they freeform?
+1. **Audio format for Rust DSP**: Store compressed on disk/network (MP3/OGG for small transfer). Decode on first load, cache decoded PCM in memory. Rust engine always works with raw PCM — the TypeScript loader handles decode + caching before handing buffers to WASM.
+
+2. **No preset loading during playback**: All presets must be loaded and cached at compile time. The compiler's `extract_preset_refs()` statically analyzes `loadPreset()` calls, and `preloadAll()` fetches + decodes everything before playback starts. If a preset is referenced but not prefetched (e.g., dynamic/computed name), it should fail at compile time rather than stall playback.
+
+3. **Voice stealing**: Steal oldest voice. Presets can declare their own `maxVoices` count (default: 64). This lets a piano preset allow more polyphony while a monophonic lead synth sets `maxVoices: 1`. The engine's voice allocator uses per-preset limits.
+
+4. **Velocity layers**: Yes — support velocity layers in the format. `SampleZone` already has `velocityRange: { low, high }`. The sampler engine selects zones by both key range AND velocity range. Current libraries don't use velocity layers but the format is ready for future high-quality sample sets.
+
+5. **User preset storage**: Web: `localStorage` by default (small presets). File System Access API preferred when available (user picks a directory, presets saved as `preset.json` + sample files — same format as the library repo). Never use a database format — always use the standard preset/sample file structure so user presets are portable and can be contributed back via PR to `songwalker-library`.
+
+6. **Sample licensing**: Yes — track license per-library. Each library's `index.json` can include a `license` field, and individual `preset.json` files include `metadata.license`. The conversion script preserves license info from the original SF2 sources.
+
+7. **GitHub Pages hosting**: Use GitHub Pages at `clevertree.github.io/songwalker-library/` to serve preset files. This avoids GitHub raw URL rate limits, provides CDN-like caching, and supports custom domain later. The `PresetLoader` base URL should point to the Pages URL, not `raw.githubusercontent.com`.
+
+8. **Tuner accuracy threshold**: Default: 10 cents. Configurable via `tunerConfig.thresholdCents`. High-end systems can use `tunerConfig.highAccuracy = true` to increase FFT resolution and autocorrelation window size at the cost of more CPU. The tuner UI should show the current threshold and allow adjustment.
+
+9. **Source library sizes** (extracted audio estimates):
+
+   | Library | Instruments | Percussion | Est. Audio | SF2 Source |
+   |---------|-------------|------------|------------|------------|
+   | FluidR3_GM | 234 files | ~40 MB | ~71 MB | (webaudiofontdata only) |
+   | GeneralUserGS | 341 files | minimal | ~24 MB | 30 MB SF2 |
+   | JCLive | 147 files | ~10 MB | ~34 MB | 51 MB SF2 |
+   | SBLive | 128 files | ~9 MB | ~30 MB | 7.3 MB SF2 |
+   | LesPaul | 14 files | — | ~13 MB | 6.3 MB SF2 |
+   | Aspirin | 203 files | minimal | ~10 MB | 16 MB SF2 |
+   | Chaos | 129 files | ~6 MB | ~9 MB | 12 MB SF2 |
+   | SoundBlasterOld | 175 files | — | ~4 MB | 1.1 MB SF2 |
+   | Small specialty | ~20 files | — | ~5 MB | Various |
+   | **Total** | **~1,395** | **~65 MB** | **~200 MB** | **147 MB SF2** |
+
+   **Decision pending from user**: How to split/manage the ~200 MB of extracted audio across the repo. Options include Git LFS, separate repos per library, or compressed-only storage (MP3 instead of WAV to reduce by ~10x).
+
+10. **Tag governance**: Freeform tags. Only define tags that the UI actively uses for filtering/display:
+    - `melodic` / `percussion` — primary type
+    - `gm:{N}` — GM program number
+    - `midi:{N}` — MIDI note (percussion)
+    - `sustained` / `one-shot` / `looped` — playback style
+    - GM category names: `piano`, `guitar`, `strings`, `brass`, `reed`, `pipe`, `organ`, etc.
+    
+    All other tags are freeform and can be added by preset authors without schema changes. The UI filters on known tags; unknown tags are still searchable via text search.

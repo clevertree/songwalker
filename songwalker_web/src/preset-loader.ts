@@ -6,7 +6,7 @@
  * (< 2 KB) and links to per-library sub-indexes which are fetched lazily.
  *
  * Usage:
- *   const loader = new PresetLoader('https://cdn.example.com/songwalker-library');
+ *   const loader = new PresetLoader('https://clevertree.github.io/songwalker-library');
  *   await loader.loadRootIndex();
  *   await loader.enableLibrary('FluidR3_GM');
  *   const preset = await loader.loadPreset('Acoustic Grand Piano');

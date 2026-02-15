@@ -591,7 +591,7 @@ async function main() {
     const errorEl = document.getElementById('error')!;
 
     // Preset browser
-    const presetLoader = new PresetLoader('https://cdn.songwalker.net/library');
+    const presetLoader = new PresetLoader('https://clevertree.github.io/songwalker-library');
     const editorWrapper = document.querySelector('.editor-wrapper') as HTMLElement;
     const presetBrowser = new PresetBrowser(editorWrapper, presetLoader);
     presetBrowser.onPresetSelect((entry) => {
